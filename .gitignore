@@ -1,3 +1,7 @@
+# Project
+.cache*
+.env
+
 # Haskell
 dist
 dist-*

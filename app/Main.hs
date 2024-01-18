@@ -14,10 +14,31 @@ import Control.Monad (forM_)
 main :: IO ()
 main = do
     loadFile defaultConfig
-    sortPlaylistByKey
+    -- groupPlaylistByKey
+    -- sortPlaylistByEnergy
 
-sortPlaylistByKey :: IO ()
-sortPlaylistByKey = do
+sortPlaylistByEnergy :: IO ()
+sortPlaylistByEnergy = do
+    clientId       <- getEnv "CLIENT_ID"
+    clientSecret   <- getEnv "CLIENT_SECRET"
+    redirectUri    <- getEnv "REDIRECT_URI"
+    username       <- getEnv "USERNAME"
+    sourcePlaylist <- getEnv "SOURCE_PLAYLIST"
+
+    putStrLn "Authorizing"
+    let scope = "user-library-read playlist-modify-public playlist-modify-private"
+    accessToken <- fmap (encodeUtf8 . T.pack) (authWithScopeRequest username clientId clientSecret scope redirectUri)
+
+    putStrLn "Sorting playlist"
+    sortPlaylistOnFeature 
+        Types.audioFeaturesEnergy 
+        ((encodeUtf8 . T.pack) sourcePlaylist) 
+        "sorted by energy level" 
+        accessToken 
+        ((encodeUtf8 . T.pack) username)
+
+groupPlaylistByKey :: IO ()
+groupPlaylistByKey = do
     clientId       <- getEnv "CLIENT_ID"
     clientSecret   <- getEnv "CLIENT_SECRET"
     redirectUri    <- getEnv "REDIRECT_URI"
@@ -35,15 +56,17 @@ sortPlaylistByKey = do
 
     -- Get tracks' audio analyses
     putStrLn "Analyzing tracks"
-    let batches = partitionSongsIntoBatches 50 playlistItems
-    batchAudioFeaturesResponses <- mapM (`getAudioFeatures` accessToken) batches
-    let audioFeatures = concat batchAudioFeaturesResponses
+    audioFeatures <- getAudioFeatures playlistItems accessToken
 
     -- Group tracks into keys and sort by tempo
     putStrLn "Sorting tracks"
-    let grouped = Data.List.groupBy (\ a b -> Types.audioFeaturesKey a == Types.audioFeaturesKey b) $ sortOn Types.audioFeaturesKey audioFeatures
+    let grouped = Data.List.groupBy 
+            (\ a b -> Types.audioFeaturesKey a == Types.audioFeaturesKey b) 
+            $ sortOn Types.audioFeaturesKey audioFeatures
     let groupedSorted = map (sortOn Types.audioFeaturesTempo) grouped
-    let byKey = map (\xs -> ((getKey . Types.audioFeaturesKey) (head xs), map Types.audioFeaturesId xs)) groupedSorted
+    let byKey = map 
+            (\xs -> ((getKey . Types.audioFeaturesKey) (head xs), map Types.audioFeaturesId xs)) 
+            groupedSorted
 
     -- Create playlists for each track
     putStrLn "Creating playlists"

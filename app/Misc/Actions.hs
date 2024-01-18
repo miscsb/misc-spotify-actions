@@ -8,10 +8,11 @@ import Network.HTTP.Simple
 import Network.HTTP.Client ( RequestBody(RequestBodyBS) )
 import qualified Data.Text       as T
 import qualified Data.ByteString as BS
+import Data.List ( sortOn )
 import Data.Text.Encoding (encodeUtf8)
 import Data.Aeson ( Object, Value(String) )
 import qualified Data.Aeson.KeyMap as KM
-import Misc.Types as Types
+import qualified Misc.Types as Types
 import System.Process ( readProcess )
 
 -- Utility
@@ -77,22 +78,28 @@ getPlaylistItems_ playlistId offset token = do
            ]
          $ setRequestPath ("/v1/playlists/" <> playlistId <> "/tracks")
          $ spotifyDefaultRequest "GET" token
-    response <- httpJSON request :: IO (Response PlaylistItems)
+    response <- httpJSON request :: IO (Response Types.PlaylistItems)
     let playlist = getResponseBody response
-    let list = map (Types.trackId . playlistItemTrack) (playlistItemsItems playlist)
-    nextEntries <- case playlistItemsNext playlist of
+    let list = map (Types.trackId . Types.playlistItemTrack) (Types.playlistItemsItems playlist)
+    nextEntries <- case Types.playlistItemsNext playlist of
         Just _  -> getPlaylistItems_ playlistId (offset + length list) token
         Nothing -> return []
     return (list ++ nextEntries)
 
-getAudioFeatures :: [T.Text] -> BS.ByteString -> IO [AudioFeatures]
+getAudioFeatures :: [T.Text] -> BS.ByteString -> IO [Types.AudioFeatures]
 getAudioFeatures trackIds token = do
+    let batches = partitionSongsIntoBatches 50 trackIds
+    batchAudioFeaturesResponses <- mapM (`getAudioFeatures_` token) batches
+    return (concat batchAudioFeaturesResponses)
+
+getAudioFeatures_ :: [T.Text] -> BS.ByteString -> IO [Types.AudioFeatures]
+getAudioFeatures_ trackIds token = do
     let queryValue = T.intercalate "," trackIds
     let request = setRequestQueryString [ ("ids", Just (encodeUtf8 queryValue) ) ]
             $ setRequestPath "/v1/audio-features"
             $ spotifyDefaultRequest "GET" token
-    response <- httpJSON request :: IO (Response AudioFeaturesArray)
-    let batchAudioFeatures = audioFeatures $ getResponseBody response
+    response <- httpJSON request :: IO (Response Types.AudioFeaturesArray)
+    let batchAudioFeatures = Types.audioFeatures $ getResponseBody response
     return batchAudioFeatures
 
 generatePlaylistFromList :: [T.Text] -> T.Text -> T.Text -> BS.ByteString -> BS.ByteString -> IO ()
@@ -113,14 +120,21 @@ generatePlaylistFromList songIds name description token userId = do
 
 addSongsToPlaylist :: [T.Text] -> T.Text -> BS.ByteString -> IO ()
 addSongsToPlaylist songIds playlistId token = do
-    let batches = partitionSongsIntoBatches 100 songIds
-    mapM_ (\batch -> addSongsToPlaylist_ batch playlistId token) batches
+    let batches = zip [0,50..] $ partitionSongsIntoBatches 50 songIds
+    mapM_ (\(offset, batch) -> addSongsToPlaylist_ batch playlistId offset token) batches
 
-addSongsToPlaylist_ :: [T.Text] -> T.Text -> BS.ByteString -> IO ()
-addSongsToPlaylist_ songIds playlistId token = do
+addSongsToPlaylist_ :: [T.Text] -> T.Text -> Int -> BS.ByteString -> IO ()
+addSongsToPlaylist_ songIds playlistId offset token = do
     let uriString = encodeUtf8 (T.intercalate "," (map ("spotify:track:" <>) songIds))
-    let requestAdd = setRequestQueryString [ ("uris", Just uriString) ]
+    let requestAdd = setRequestQueryString [ ("uris", Just uriString), ("position", Just ((encodeUtf8 . T.pack . show) offset)) ]
             $ setRequestPath ("/v1/playlists/" <> encodeUtf8 playlistId <> "/tracks")
             $ spotifyDefaultRequest "POST" token
     _ <- httpBS requestAdd
     return ()
+
+sortPlaylistOnFeature :: Ord a => (Types.AudioFeatures -> a) -> BS.ByteString -> T.Text -> BS.ByteString -> BS.ByteString -> IO ()
+sortPlaylistOnFeature sorter playlistId newPlaylistName token userId = do
+    playlistIds <- getPlaylistItems playlistId token
+    audioFeatures <- getAudioFeatures playlistIds token
+    let sorted = sortOn sorter audioFeatures
+    generatePlaylistFromList (map Types.audioFeaturesId sorted) newPlaylistName "" token userId

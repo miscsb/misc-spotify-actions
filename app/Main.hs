@@ -23,6 +23,7 @@ data PlaylistSorter = PlaylistSorter {
 mkYesod "PlaylistSorter" [parseRoutes|
 /sorter SorterR GET
 /sorter/result SorterResultR GET
+/sorter/reshuffle SorterReshuffleR POST
 /sorter/left SorterLeftR POST
 /sorter/right SorterRightR POST
 |]
@@ -49,6 +50,15 @@ postSorterLeftR = resourceGenerator GT
 postSorterRightR :: Handler Html
 postSorterRightR = resourceGenerator LT
 
+postSorterReshuffleR :: Handler Html
+postSorterReshuffleR = defaultLayout $ do
+    yesod <- getYesod
+    mergeSort <- liftIO $ readIORef $ ordering yesod
+    mergeSort' <- liftIO $ mergeSortHelper' <$> shuffle (mergeSortResult mergeSort)
+    _ <- liftIO $ atomicModifyIORef (ordering yesod) (\h -> (mergeSort', h))
+    _ <- liftIO $ atomicModifyIORef (matchNumber yesod) (\c -> (1, c))
+    redirect SorterR
+
 getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
     yesod <- getYesod
@@ -74,7 +84,8 @@ getSorterR = defaultLayout $ do
     toWidget [whamlet|
         <h1>Playlist Sorter
         <p>You are sorting the playlist #{playlist}
-
+        <form action="http://localhost:3000/sorter/reshuffle", method="POST">
+            <input type="submit" value="Restart">
         <p><b>Match #{count}</b>
     |]
     toWidget [cassius|
@@ -160,7 +171,7 @@ main = do
     putStrLn "Loading playlist"
     tracks <- flip (>>=) shuffle (map Types.playlistItemTrack
         <$> SP.getPlaylistItems (encodeUtf8 $ T.pack sourcePlaylist) accessToken)
-    let msh = mergeSortHelper' (take 20 tracks) :: MergeSortHelper Types.Track
+    let msh = mergeSortHelper' tracks :: MergeSortHelper Types.Track
 
     -- initiate vars
     putStrLn "Intiating variables"

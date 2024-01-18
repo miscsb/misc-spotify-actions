@@ -6,7 +6,7 @@ import qualified Data.Text       as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.List ( groupBy, sortOn )
 import qualified Misc.Types as Types
-import Misc.Actions
+import qualified Misc.Spotify as SP
 import Configuration.Dotenv (loadFile, defaultConfig)
 import System.Environment (getEnv)
 import Control.Monad (forM_)
@@ -27,10 +27,10 @@ sortPlaylistByEnergy = do
 
     putStrLn "Authorizing"
     let scope = "user-library-read playlist-modify-public playlist-modify-private"
-    accessToken <- fmap (encodeUtf8 . T.pack) (authWithScopeRequest username clientId clientSecret scope redirectUri)
+    accessToken <- fmap (encodeUtf8 . T.pack) (SP.authWithScopeRequest username clientId clientSecret scope redirectUri)
 
     putStrLn "Sorting playlist"
-    sortPlaylistOnFeature 
+    SP.sortPlaylistOnFeature 
         Types.audioFeaturesEnergy 
         ((encodeUtf8 . T.pack) sourcePlaylist) 
         "sorted by energy level" 
@@ -48,15 +48,15 @@ groupPlaylistByKey = do
     -- Get token with playlist read permissions. Calls Python script.
     putStrLn "Authorizing"
     let scope = "user-library-read playlist-modify-public playlist-modify-private"
-    accessToken <- fmap (encodeUtf8 . T.pack) (authWithScopeRequest username clientId clientSecret scope redirectUri)
+    accessToken <- fmap (encodeUtf8 . T.pack) (SP.authWithScopeRequest username clientId clientSecret scope redirectUri)
 
     -- Get tracks to sort
     putStrLn "Collecting tracks"
-    playlistItems <- getPlaylistItems ((encodeUtf8 . T.pack) sourcePlaylist) accessToken
+    playlistItems <- SP.getPlaylistItems ((encodeUtf8 . T.pack) sourcePlaylist) accessToken
 
     -- Get tracks' audio analyses
     putStrLn "Analyzing tracks"
-    audioFeatures <- getAudioFeatures playlistItems accessToken
+    audioFeatures <- SP.getAudioFeatures playlistItems accessToken
 
     -- Group tracks into keys and sort by tempo
     putStrLn "Sorting tracks"
@@ -65,13 +65,13 @@ groupPlaylistByKey = do
             $ sortOn Types.audioFeaturesKey audioFeatures
     let groupedSorted = map (sortOn Types.audioFeaturesTempo) grouped
     let byKey = map 
-            (\xs -> ((getKey . Types.audioFeaturesKey) (head xs), map Types.audioFeaturesId xs)) 
+            (\xs -> ((SP.getKey . Types.audioFeaturesKey) (head xs), map Types.audioFeaturesId xs)) 
             groupedSorted
 
     -- Create playlists for each track
     putStrLn "Creating playlists"
     forM_ byKey (\(songKey, ids) -> 
-        generatePlaylistFromList ids 
+        SP.generatePlaylistFromList ids 
             ("Key of " <> songKey) 
             ("Songs that Spotify says are in " <> songKey <> ".") 
             accessToken 

@@ -2,7 +2,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Redundant $" #-}
 
-module Misc.Actions where
+module Misc.Spotify where
 
 import Network.HTTP.Simple
 import Network.HTTP.Client ( RequestBody(RequestBodyBS) )

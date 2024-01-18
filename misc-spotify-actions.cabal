@@ -19,7 +19,7 @@ common warnings
 executable misc-spotify-actions
     import:           warnings
     main-is:          Main.hs
-    other-modules:    Misc.Actions,
+    other-modules:    Misc.Spotify,
                       Misc.Types
     -- other-extensions:
     build-depends:    base ^>=4.17.2.0,

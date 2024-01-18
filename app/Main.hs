@@ -5,7 +5,7 @@ module Main where
 import qualified Data.Text       as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.List ( groupBy, sortOn )
-import Misc.Types as Types
+import qualified Misc.Types as Types
 import Misc.Actions
 import Configuration.Dotenv (loadFile, defaultConfig)
 import System.Environment (getEnv)
@@ -32,14 +32,14 @@ main = do
     -- Get tracks' audio analyses
     putStrLn "Analyzing tracks"
     let batches = partitionSongsIntoBatches 50 playlistItems
-    batchAudioFeaturesResponses <- mapM (`getBatchAudioFeatures` accessToken) batches
+    batchAudioFeaturesResponses <- mapM (`getAudioFeatures` accessToken) batches
     let audioFeatures = concat batchAudioFeaturesResponses
 
     -- Group tracks into keys and sort by tempo
     putStrLn "Sorting tracks"
-    let grouped = Data.List.groupBy (\ a b -> Types.key a == Types.key b) $ sortOn Types.key audioFeatures
-    let groupedSorted = map (sortOn Types.tempo) grouped
-    let byKey = map (\xs -> ((getKey . Types.key) (head xs), map Types.af_id xs)) groupedSorted
+    let grouped = Data.List.groupBy (\ a b -> Types.audioFeaturesKey a == Types.audioFeaturesKey b) $ sortOn Types.audioFeaturesKey audioFeatures
+    let groupedSorted = map (sortOn Types.audioFeaturesTempo) grouped
+    let byKey = map (\xs -> ((getKey . Types.audioFeaturesKey) (head xs), map Types.audioFeaturesId xs)) groupedSorted
 
     -- Create playlists for each track
     putStrLn "Creating playlists"

@@ -67,34 +67,32 @@ authWithScopeRequest username clientId clientSecret scope redirectUri
 -- Web API
 
 getPlaylistItems :: BS.ByteString -> BS.ByteString -> IO [T.Text]
-getPlaylistItems playlistId = getPlaylistItems_ (Just playlistId) 0
+getPlaylistItems playlistId = getPlaylistItems_ playlistId 0
 
-getPlaylistItems_ :: Maybe BS.ByteString -> Int -> BS.ByteString -> IO [T.Text]
-getPlaylistItems_ Nothing _ _ = do
-    return []
-getPlaylistItems_ (Just playlistId) offset token = do
+getPlaylistItems_ :: BS.ByteString -> Int -> BS.ByteString -> IO [T.Text]
+getPlaylistItems_ playlistId offset token = do
     let request
          = setRequestQueryString [
-             ("fields", Just "uri,next,items.track.id"),
              ("offset", Just ((encodeUtf8 . T.pack . show) offset))
            ]
          $ setRequestPath ("/v1/playlists/" <> playlistId <> "/tracks")
          $ spotifyDefaultRequest "GET" token
-
-    response <- httpJSON request :: IO (Response Playlist)
+    response <- httpJSON request :: IO (Response PlaylistItems)
     let playlist = getResponseBody response
-    let list = map (Types.id . track) (playlist_items playlist)
-    nextEntries <- getPlaylistItems_ (playlist_next_url playlist >> Just playlistId) (offset + length list) token
+    let list = map (Types.trackId . playlistItemTrack) (playlistItemsItems playlist)
+    nextEntries <- case playlistItemsNext playlist of
+        Just _  -> getPlaylistItems_ playlistId (offset + length list) token
+        Nothing -> return []
     return (list ++ nextEntries)
 
-getBatchAudioFeatures :: [T.Text] -> BS.ByteString -> IO [AudioFeatures]
-getBatchAudioFeatures trackIds token = do
+getAudioFeatures :: [T.Text] -> BS.ByteString -> IO [AudioFeatures]
+getAudioFeatures trackIds token = do
     let queryValue = T.intercalate "," trackIds
     let request = setRequestQueryString [ ("ids", Just (encodeUtf8 queryValue) ) ]
             $ setRequestPath "/v1/audio-features"
             $ spotifyDefaultRequest "GET" token
-    response <- httpJSON request :: IO (Response AudioAnalysis)
-    let batchAudioFeatures = audio_features (getResponseBody response)
+    response <- httpJSON request :: IO (Response AudioFeaturesArray)
+    let batchAudioFeatures = audioFeatures $ getResponseBody response
     return batchAudioFeatures
 
 generatePlaylistFromList :: [T.Text] -> T.Text -> T.Text -> BS.ByteString -> BS.ByteString -> IO ()
@@ -124,5 +122,5 @@ addSongsToPlaylist_ songIds playlistId token = do
     let requestAdd = setRequestQueryString [ ("uris", Just uriString) ]
             $ setRequestPath ("/v1/playlists/" <> encodeUtf8 playlistId <> "/tracks")
             $ spotifyDefaultRequest "POST" token
-    httpBS requestAdd
+    _ <- httpBS requestAdd
     return ()

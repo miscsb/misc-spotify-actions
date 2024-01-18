@@ -2,6 +2,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use newtype instead of data" #-}
 {-# HLINT ignore "Use camelCase" #-}
+{-# LANGUAGE InstanceSigs #-}
 
 module Misc.Types where
 
@@ -13,53 +14,114 @@ import Data.Aeson
       Options(fieldLabelModifier),
       ToJSON )
 import qualified Data.Text as T
+import qualified Text.Casing
 
 -- Data | Auth --
 data TokenContainer = TokenContainer {
-        access_token :: T.Text
+        accessToken :: T.Text
     } deriving (Generic, Show)
 instance ToJSON TokenContainer
-instance FromJSON TokenContainer
+instance FromJSON TokenContainer where
+    parseJSON = genericParseJSON (customOptions "")
 
--- Data | Playlists --
-data Playlist = Playlist {
-        playlist_next_url :: Maybe T.Text
-    ,   playlist_items    :: [PlaylistTrack]
+-- Playlists --
+data PlaylistItems = PlaylistItems {
+        playlistItemsNext   :: Maybe T.Text
+    ,   playlistItemsItems :: [PlaylistItem]
     } deriving (Generic, Show)
-instance ToJSON Playlist
-instance FromJSON Playlist where
-    parseJSON = genericParseJSON (defaultOptions { fieldLabelModifier = body_noprefix })
+instance ToJSON PlaylistItems
+instance FromJSON PlaylistItems where
+    parseJSON = genericParseJSON (customOptions "playlistItems")
 
-data PlaylistTrack = PlaylistTrack {
-        track :: TrackContainer
+data PlaylistItem = PlaylistItem {
+        playlistItemAddedAt :: T.Text
+        -- TODO add added_by --
+    ,   playlistItemTrack :: Track
+        -- TODO add EpisodeTrack suppert --
     } deriving (Generic, Show)
-instance ToJSON PlaylistTrack
-instance FromJSON PlaylistTrack
+instance ToJSON PlaylistItem
+instance FromJSON PlaylistItem where
+    parseJSON = genericParseJSON (customOptions "playlistItem")
 
-data TrackContainer = TrackContainer {
-        id :: T.Text
+data Track = Track {
+        trackAlbum       :: Album
+    ,   trackArtists     :: [Artist]
+    ,   trackDiscNumber  :: Int
+    ,   trackDurationMs  :: Int
+    ,   trackExplicit    :: Bool
+    ,   trackHref        :: T.Text
+    ,   trackId          :: T.Text
+    -- TODO add is_playable, linked_from, restrictions --
+    ,   trackName        :: T.Text
+    ,   trackPopularity  :: Double
+    ,   trackPreviewUrl  :: Maybe T.Text
+    ,   trackTrackNumber :: Int
+    ,   trackUri         :: T.Text
     } deriving (Generic, Show)
-instance ToJSON TrackContainer
-instance FromJSON TrackContainer
+instance ToJSON Track
+instance FromJSON Track where
+    parseJSON = genericParseJSON (customOptions "track")
 
--- Data | Track Analysis --
-data AudioAnalysis = AudioAnalysis {
-        audio_features :: [AudioFeatures]
+data Artist = Artist {
+        artistName       :: T.Text
+    ,   artistId         :: T.Text
+    -- TODO add other fields --
     } deriving (Generic, Show)
-instance ToJSON AudioAnalysis
-instance FromJSON AudioAnalysis
+instance ToJSON Artist
+instance FromJSON Artist where
+    parseJSON = genericParseJSON (customOptions "artist")
 
-data AudioFeatures = AudioFeatures {
-        af_id :: T.Text
-    ,   key   :: Int
-    ,   tempo :: Double
+data Album = Album {
+        albumImages     :: [Image]
+    ,   albumName       :: T.Text
+    ,   albumId         :: T.Text
+    -- TODO add other fields --
+    } deriving (Generic, Show)
+instance ToJSON Album
+instance FromJSON Album where
+    parseJSON = genericParseJSON (customOptions "album")
+
+data Image = Image {
+        imageUrl    :: T.Text
+    ,   imageHeight :: Maybe Int
+    ,   imageWidth  :: Maybe Int
+    } deriving (Generic, Show)
+instance ToJSON Image
+instance FromJSON Image where
+    parseJSON = genericParseJSON (customOptions "image")
+
+-- Audio Analyses --
+data AudioFeatures = AudioFeaturesObject {
+        audioFeaturesAcousticness     :: Double
+    ,   audioFeaturesAnalysisUrl      :: T.Text
+    ,   audioFeaturesDanceability     :: Double
+    ,   audioFeaturesDurationMs       :: Int
+    ,   audioFeaturesEnergy           :: Double
+    ,   audioFeaturesId               :: T.Text
+    ,   audioFeaturesInstrumentalness :: Double
+    ,   audioFeaturesKey              :: Int
+    ,   audioFeaturesLiveness         :: Double
+    ,   audioFeaturesLoudness         :: Double
+    ,   audioFeaturesMode             :: Int
+    ,   audioFeaturesSpeechiness      :: Double
+    ,   audioFeaturesTempo            :: Double
+    ,   audioFeaturesTimeSignature    :: Int
+    ,   audioFeaturesTrackHref        :: T.Text
+    ,   audioFeaturesUri              :: T.Text
+    ,   audioFeaturesValence          :: Double
     } deriving (Generic, Show)
 instance ToJSON AudioFeatures
 instance FromJSON AudioFeatures where
-    parseJSON = genericParseJSON (defaultOptions { fieldLabelModifier = body_noprefix })
+    parseJSON = genericParseJSON (customOptions "audioFeatures")
 
-body_noprefix :: String -> String
-body_noprefix "af_id" = "id"
-body_noprefix "playlist_items" = "items"
-body_noprefix "playlist_next_url" = "next"
-body_noprefix s = s
+data AudioFeaturesArray = AudioFeaturesArray {
+    audioFeatures :: [AudioFeatures]
+} deriving (Generic, Show)
+instance FromJSON AudioFeaturesArray where
+    parseJSON = genericParseJSON (customOptions "")
+
+removePrefixSnake :: String -> String -> String
+removePrefixSnake prefix = Text.Casing.quietSnake . drop (length prefix)
+
+customOptions :: String -> Options
+customOptions prefix = defaultOptions { fieldLabelModifier = removePrefixSnake prefix }

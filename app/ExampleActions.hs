@@ -54,7 +54,7 @@ groupPlaylistByKey = do
 
     -- Get tracks' audio analyses
     putStrLn "Analyzing tracks"
-    audioFeatures <- SP.getAudioFeatures playlistItems accessToken
+    audioFeatures <- SP.getAudioFeatures (map (Types.trackId . Types.playlistItemTrack) playlistItems) accessToken
 
     -- Group tracks into keys and sort by tempo
     putStrLn "Sorting tracks"

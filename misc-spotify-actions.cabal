@@ -21,6 +21,7 @@ executable misc-spotify-actions
     main-is:          Main.hs
     other-modules:    Misc.Spotify,
                       Misc.Types,
+                      Misc.Util,
                       ExampleActions
     -- other-extensions:
     build-depends:    base ^>=4.17.2.0,
@@ -32,6 +33,10 @@ executable misc-spotify-actions
                       process ^>= 1.6.17.0,
                       dotenv ^>= 0.11.0.2,
                       casing ^>= 0.1.4.1,
-                      yesod
+                      yesod,
+                      array,
+                      random,
+                      containers,
+                      blaze-markup
     hs-source-dirs:   app
     default-language: Haskell2010

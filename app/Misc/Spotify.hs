@@ -67,10 +67,10 @@ authWithScopeRequest username clientId clientSecret scope redirectUri
 
 -- Web API
 
-getPlaylistItems :: BS.ByteString -> BS.ByteString -> IO [T.Text]
+getPlaylistItems :: BS.ByteString -> BS.ByteString -> IO [Types.PlaylistItem]
 getPlaylistItems playlistId = getPlaylistItems_ playlistId 0
 
-getPlaylistItems_ :: BS.ByteString -> Int -> BS.ByteString -> IO [T.Text]
+getPlaylistItems_ :: BS.ByteString -> Int -> BS.ByteString -> IO [Types.PlaylistItem]
 getPlaylistItems_ playlistId offset token = do
     let request
          = setRequestQueryString [
@@ -80,7 +80,7 @@ getPlaylistItems_ playlistId offset token = do
          $ spotifyDefaultRequest "GET" token
     response <- httpJSON request :: IO (Response Types.PlaylistItems)
     let playlist = getResponseBody response
-    let list = map (Types.trackId . Types.playlistItemTrack) (Types.playlistItemsItems playlist)
+    let list = Types.playlistItemsItems playlist
     nextEntries <- case Types.playlistItemsNext playlist of
         Just _  -> getPlaylistItems_ playlistId (offset + length list) token
         Nothing -> return []
@@ -134,7 +134,8 @@ addSongsToPlaylist_ songIds playlistId offset token = do
 
 sortPlaylistOnFeature :: Ord a => (Types.AudioFeatures -> a) -> BS.ByteString -> T.Text -> BS.ByteString -> BS.ByteString -> IO ()
 sortPlaylistOnFeature sorter playlistId newPlaylistName token userId = do
-    playlistIds <- getPlaylistItems playlistId token
+    playlistItems <- getPlaylistItems playlistId token
+    let playlistIds = map (Types.trackId . Types.playlistItemTrack) playlistItems
     audioFeatures <- getAudioFeatures playlistIds token
     let sorted = sortOn sorter audioFeatures
     generatePlaylistFromList (map Types.audioFeaturesId sorted) newPlaylistName "" token userId

@@ -7,14 +7,17 @@
 import Yesod hiding (count)
 import Configuration.Dotenv (loadFile, defaultConfig)
 import Data.IORef
-import qualified Data.Text as T
--- import Misc.Types (Track)
+import qualified Misc.Types as Types
+import qualified Misc.Spotify as SP
 import Misc.Util
--- import Misc.Types
+import System.Environment
+import Data.Text.Encoding (encodeUtf8)
+import qualified Data.Text as T
 
 data PlaylistSorter = PlaylistSorter {
-        matchNumber :: IORef Integer
-    ,   ordering    :: IORef (MergeSortHelper Integer)
+        matchNumber  :: IORef Integer
+    ,   playlistName :: IORef String
+    ,   ordering     :: IORef (MergeSortHelper Types.Track)
 }
 mkYesod "PlaylistSorter" [parseRoutes|
 /sorter SorterR GET
@@ -47,40 +50,35 @@ getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
     yesod <- getYesod
     mergeSort <- liftIO $ readIORef $ ordering yesod
-    let result = mergeSortResult mergeSort
+    playlist <- liftIO $ readIORef $ playlistName yesod
 
     setTitle "Playlist Sorter"
     let firstWidget = toWidget [whamlet|
-        <h1> Playlist Sorter
+        <h1>Playlist Sorter
+        <h2>You sorted the playlist #{playlist}
         <p>These are the results of the sort:
     |]
 
-    foldl (>>) firstWidget $ zipWith trackWidget [1..] result
+    foldl (>>) firstWidget $ zipWith trackWidget [1..] (mergeSortResult mergeSort)
 
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
     yesod <- getYesod
-
-    let handleMaybePair = (\x -> case x of
-            Nothing -> ("N/A", "N/A")
-            Just (y, z) -> (T.pack $ show y, T.pack $ show z)
-            )
     count <- liftIO $ readIORef $ matchNumber yesod
     mergeSort <- liftIO $ readIORef $ ordering yesod
+    playlist <- liftIO $ readIORef $ playlistName yesod
 
-    if isMergeSortComplete mergeSort
-        then redirect SorterResultR
-    else do
-        let (compLeft, compRight) = handleMaybePair <$> nextComputation $ mergeSort
-        setTitle "Playlist Sorter"
-        toWidget
-            [whamlet|
-                <h1> Playlist Sorter
-                <p>You are sorting the playlist ???
+    case nextComputation mergeSort of
+        Nothing -> redirect SorterResultR
+        Just (trackLeft, trackRight) -> do
+            setTitle "Playlist Sorter"
+            toWidget [whamlet|
+                <h1>Playlist Sorter
+                <h2>You are sorting the playlist #{playlist}
 
                 <p>Match #{count}
-                <p>Song 1: #{compLeft}
-                <p>Song 2: #{compRight}
+                <p>Song 1: #{Types.trackName trackLeft}
+                <p>Song 2: #{Types.trackName trackRight}
 
                 <form action="http://localhost:3000/sorter/left", method="POST">
                     <input type="submit" value="Song 1 wins">
@@ -88,22 +86,41 @@ getSorterR = defaultLayout $ do
                     <input type="submit" value="Song 2 wins">
             |]
 
-trackWidget :: Integer -> Integer -> WidgetFor PlaylistSorter ()
-trackWidget rank value = do
+trackWidget :: Integer -> Types.Track -> WidgetFor PlaylistSorter ()
+trackWidget rank track = do
     toWidget
         [whamlet|
-            <p>#{rank}: #{value}
+            <p>#{rank}: #{Types.trackName track}
         |]
 
 main :: IO ()
 main = do
+    -- load environment variables
     loadFile defaultConfig
+    clientId       <- getEnv "CLIENT_ID"
+    clientSecret   <- getEnv "CLIENT_SECRET"
+    redirectUri    <- getEnv "REDIRECT_URI"
+    username       <- getEnv "USERNAME"
+    sourcePlaylist <- getEnv "SOURCE_PLAYLIST"
 
-    matchNumber' <- newIORef 1
+    -- authorize
+    putStrLn "Authorizing"
+    let scope = "user-library-read"
+    accessToken <- fmap (encodeUtf8 . T.pack) (SP.authWithScopeRequest username clientId clientSecret scope redirectUri)
 
-    ordering' <- newIORef $ mergeSortHelper' [1, 5, 2, 4, 3]
+    -- load playlist
+    tracks <- map Types.playlistItemTrack 
+        <$> SP.getPlaylistItems (encodeUtf8 $ T.pack sourcePlaylist) accessToken
+    let msh = mergeSortHelper' tracks :: MergeSortHelper Types.Track
 
+    -- initiate vars
+    playlistName' <- newIORef sourcePlaylist
+    matchNumber'  <- newIORef 1
+    ordering'     <- newIORef msh
+
+    -- start server and (todo) open browser
     warp 3000 $ PlaylistSorter {
-        matchNumber = matchNumber'
-    ,   ordering = ordering'
+        playlistName = playlistName',
+        matchNumber = matchNumber', 
+        ordering = ordering'
     }

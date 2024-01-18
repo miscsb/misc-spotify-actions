@@ -14,6 +14,10 @@ import Control.Monad (forM_)
 main :: IO ()
 main = do
     loadFile defaultConfig
+    sortPlaylistByKey
+
+sortPlaylistByKey :: IO ()
+sortPlaylistByKey = do
     clientId       <- getEnv "CLIENT_ID"
     clientSecret   <- getEnv "CLIENT_SECRET"
     redirectUri    <- getEnv "REDIRECT_URI"

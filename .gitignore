@@ -1,6 +1,7 @@
 # Project
 .cache*
 .env
+client_session_key.aes
 
 # Haskell
 dist

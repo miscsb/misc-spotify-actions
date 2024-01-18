@@ -13,6 +13,7 @@ import Misc.Util
 import System.Environment
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text as T
+import qualified Data.ByteString as BS
 
 data PlaylistSorter = PlaylistSorter {
         matchNumber  :: IORef Integer
@@ -27,6 +28,7 @@ mkYesod "PlaylistSorter" [parseRoutes|
 |]
 instance Yesod PlaylistSorter
 
+-- state mutators
 incCount :: (Num a, Show a) => IORef a -> IO a
 incCount counter = atomicModifyIORef counter (\c -> (c+1, c))
 
@@ -40,6 +42,7 @@ resourceGenerator ord = defaultLayout $ do
     _ <- liftIO $ incCount $ matchNumber yesod
     redirect SorterR
 
+-- resources
 postSorterLeftR :: Handler Html
 postSorterLeftR = resourceGenerator GT
 
@@ -58,8 +61,7 @@ getSorterResultR = defaultLayout $ do
         <h2>You sorted the playlist #{playlist}
         <p>These are the results of the sort:
     |]
-
-    foldl (>>) firstWidget $ zipWith trackWidget [1..] (mergeSortResult mergeSort)
+    foldl (>>) firstWidget $ zipWith rankedTrackWidget [1..] (mergeSortResult mergeSort)
 
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
@@ -68,30 +70,76 @@ getSorterR = defaultLayout $ do
     mergeSort <- liftIO $ readIORef $ ordering yesod
     playlist <- liftIO $ readIORef $ playlistName yesod
 
+    setTitle "Playlist Sorter"
+    toWidget [whamlet|
+        <h1>Playlist Sorter
+        <p>You are sorting the playlist #{playlist}
+
+        <p><b>Match #{count}</b>
+    |]
+    toWidget [cassius|
+        .inline-block
+            display: inline-block
+        .padded
+            padding-right: 40px
+            padding-left: 40px
+            padding-bottom: 20px
+        .custom-button
+            width: 200px
+            height: 80px
+            white-space: normal
+        .judgement-bar
+            align-items: center
+            display: flex
+        .judgement-bar-item
+            padding-left: 40px
+            padding-right: 40px
+    |]
     case nextComputation mergeSort of
         Nothing -> redirect SorterResultR
         Just (trackLeft, trackRight) -> do
-            setTitle "Playlist Sorter"
+            trackWidget trackLeft
+            trackWidget trackRight
             toWidget [whamlet|
-                <h1>Playlist Sorter
-                <h2>You are sorting the playlist #{playlist}
-
-                <p>Match #{count}
-                <p>Song 1: #{Types.trackName trackLeft}
-                <p>Song 2: #{Types.trackName trackRight}
-
-                <form action="http://localhost:3000/sorter/left", method="POST">
-                    <input type="submit" value="Song 1 wins">
-                <form action="http://localhost:3000/sorter/right", method="POST">
-                    <input type="submit" value="Song 2 wins">
+                <br>
+                <div class="judgement-bar">
+                    <form class="inline-block judgement-bar-item", action="http://localhost:3000/sorter/left", method="POST">
+                        <input class="inline-block custom-button", type="submit" value="#{Types.trackName trackLeft} wins">
+                    <form class="inline-block judgement-bar-item", action="http://localhost:3000/sorter/right", method="POST">
+                        <input class="inline-block custom-button", type="submit" value="#{Types.trackName trackRight} wins">
             |]
 
-trackWidget :: Integer -> Types.Track -> WidgetFor PlaylistSorter ()
-trackWidget rank track = do
-    toWidget
-        [whamlet|
-            <p>#{rank}: #{Types.trackName track}
-        |]
+-- widgets
+rankedTrackWidget :: Integer -> Types.Track -> WidgetFor PlaylistSorter ()
+rankedTrackWidget rank track = do
+    toWidget [whamlet|
+        <p>#{rank}: #{Types.trackName track}
+    |]
+
+trackWidget :: Types.Track -> WidgetFor PlaylistSorter ()
+trackWidget track = do
+    let imageUrl = case (Types.albumImages . Types.trackAlbum) track of
+            [] -> ""
+            image:_ -> Types.imageUrl image
+    let audioUrl = case Types.trackPreviewUrl track of
+            Nothing -> ""
+            Just url -> url
+    let artistName = (Types.artistName . head . Types.trackArtists) track
+    toWidget [cassius|
+        .preview
+            width: 200px
+        .track-text
+            width: 150px
+            height: 30px
+            text-align: left
+    |]
+    toWidget [whamlet|
+        <div class="inline-block padded">
+            <img src="#{imageUrl}" alt="#{Types.trackName track}", height="200", width="200">
+            <p class="track-text">#{Types.trackName track}
+            <p class="track-text">by #{artistName}
+            <audio class="preview" controls> <source src="#{audioUrl}">
+    |]
 
 main :: IO ()
 main = do
@@ -109,18 +157,21 @@ main = do
     accessToken <- fmap (encodeUtf8 . T.pack) (SP.authWithScopeRequest username clientId clientSecret scope redirectUri)
 
     -- load playlist
-    tracks <- map Types.playlistItemTrack 
-        <$> SP.getPlaylistItems (encodeUtf8 $ T.pack sourcePlaylist) accessToken
-    let msh = mergeSortHelper' tracks :: MergeSortHelper Types.Track
+    putStrLn "Loading playlist"
+    tracks <- flip (>>=) shuffle (map Types.playlistItemTrack
+        <$> SP.getPlaylistItems (encodeUtf8 $ T.pack sourcePlaylist) accessToken)
+    let msh = mergeSortHelper' (take 20 tracks) :: MergeSortHelper Types.Track
 
     -- initiate vars
+    putStrLn "Intiating variables"
     playlistName' <- newIORef sourcePlaylist
     matchNumber'  <- newIORef 1
     ordering'     <- newIORef msh
 
-    -- start server and (todo) open browser
+    -- start site and (todo) open browser
+    putStrLn "Starting site"
     warp 3000 $ PlaylistSorter {
         playlistName = playlistName',
-        matchNumber = matchNumber', 
+        matchNumber = matchNumber',
         ordering = ordering'
     }

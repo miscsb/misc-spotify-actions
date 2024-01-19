@@ -28,12 +28,20 @@ data MergeSortComputation = Sort Range | Merge Range Range
 
 expand :: MergeSortComputation -> [MergeSortComputation]
 expand m@(Merge _ _) = [m]
+expand   (Sort (_, 0)) = []
 expand   (Sort (_, 1)) = []
 expand   (Sort (start, len)) =
     let mid = div len 2
         rangeL = (start, mid)
         rangeR = (start + mid, len - mid)
     in concat [expand (Sort rangeL), expand (Sort rangeR), [Merge rangeL rangeR]]
+
+estimateComparisonCount :: MergeSortComputation -> Integer
+estimateComparisonCount (Sort (_, len)) = round $ logBase (fromIntegral len) (2.0 :: Double)
+estimateComparisonCount (Merge (_, lenL) (_, lenR)) = fromIntegral $ lenL + lenR
+
+estimateRemainingComparisonCount :: MergeSortHelper a -> Integer
+estimateRemainingComparisonCount (_, _, xs) = sum $ Prelude.map estimateComparisonCount xs
 
 type MergeSortHelper a = (IntMap a, Maybe (MergeHelper a), [MergeSortComputation])
     -- (source list, steps, next computations)
@@ -45,9 +53,9 @@ mergeSortHelper src (comp:comps) = (src, Just (mergeHelper src comp), comps)
 mergeSortHelper' :: [a] -> MergeSortHelper a
 mergeSortHelper' src = mergeSortHelper (fromList (zip [0..] src)) (expand (Sort (0, length src)))
 
-nextComputation :: MergeSortHelper a -> Maybe (a, a)
-nextComputation (_, Nothing, _) = Nothing
-nextComputation (_, Just currentMerge, _) = Just (getCandidates currentMerge)
+nextComparison :: MergeSortHelper a -> Maybe (a, a)
+nextComparison (_, Nothing, _) = Nothing
+nextComparison (_, Just currentMerge, _) = Just (getCandidates currentMerge)
 
 updateMergeSort :: Ordering -> MergeSortHelper a -> MergeSortHelper a
 updateMergeSort _ msh@(_, Nothing, _) = msh

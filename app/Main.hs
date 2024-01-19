@@ -76,7 +76,10 @@ getSorterResultR = defaultLayout $ do
     bodyStyleWidget
     let firstWidget = toWidget [whamlet|
         <h1>Playlist Sorter
-        <h2>You sorted the playlist #{playlist}
+        <div>
+            <p>You sorted the playlist #{playlist}.
+            <form class="inline-block", action="http://localhost:3000/sorter/reshuffle", method="POST"> 
+                <input class="btn-link inline-block" type="submit" value="Restart?">
         <p>These are the results of the sort:
     |]
     foldl (>>) firstWidget $ zipWith rankedTrackWidget [1..] (mergeSortResult mergeSort)
@@ -105,15 +108,28 @@ getSorterR = defaultLayout $ do
     case nextComparison mergeSort of
         Nothing -> redirect SorterResultR
         Just (trackLeft, trackRight) -> do
-            trackWidget trackLeft
-            trackWidget trackRight
             toWidget [whamlet|
                 <br>
-                <div class="judgement-bar">
-                    <form class="inline-block judgement-bar-item", action="http://localhost:3000/sorter/left", method="POST">
-                        <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackLeft} wins">
-                    <form class="inline-block judgement-bar-item", action="http://localhost:3000/sorter/right", method="POST">
-                        <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackRight} wins">
+                <div class="grid-container-4">
+                    <div class="grid-item">
+                        ^{trackImageWidget  trackLeft}
+                    <div class="grid-item">
+                        ^{trackAuthorWidget trackLeft}
+                    <div class="grid-item">
+                        ^{trackAuthorWidget trackRight}
+                    <div class="grid-item">
+                        ^{trackImageWidget  trackRight}
+                <div class="grid-container-4">
+                    <div class="grid-item">
+                        ^{trackAudioWidget  trackLeft}
+                    <div class="grid-item">
+                        <form action="http://localhost:3000/sorter/left", method="POST">
+                            <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackLeft} wins">
+                    <div class="grid-item">
+                        <form action="http://localhost:3000/sorter/right", method="POST">
+                            <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackRight} wins">
+                    <div class="grid-item">
+                        ^{trackAudioWidget trackRight}
             |]
 
 -- widgets
@@ -132,6 +148,9 @@ bodyStyleWidget = toWidget
             cursor: pointer;
             padding: 20px
             white-space: normal
+        .button:hover
+            background-color: white
+            transition: 0.5s
         .custom-button
             padding: 0px
             width: 200px
@@ -146,24 +165,39 @@ bodyStyleWidget = toWidget
             text-decoration: underline
             font-family: inherit
             font-size: inherit
+        .grid-container-1
+            display: inline-grid
+            grid-template-columns: auto
+            align-items: baseline
+        .grid-container-2
+            display: inline-grid
+            grid-template-columns: auto auto
+            align-items: baseline
+        .grid-container-3
+            display: inline-grid
+            grid-template-columns: auto auto auto
+            align-items: baseline
+        .grid-container-4
+            display: inline-grid
+            grid-template-columns: auto auto auto auto
+            align-items: flex-start
+        .grid-item
+            width: 200px
+            height: 200px
         .inline-block
             display: inline-block
         .padded
             padding-right: 40px
             padding-left: 40px
             padding-bottom: 20px
-        .judgement-bar
-            align-items: center
-            display: flex
-        .judgement-bar-item
-            padding-left: 40px
-            padding-right: 40px
-        .preview
-            width: 200px
         .track-text
-            width: 150px
-            height: 30px
+            width: 100%
             text-align: left
+            white-space: normal
+            margin-left: 20px
+            margin-right: 20px
+        .h-fit-to-parent
+            width: 100%
     |]
 
 rankedTrackWidget :: Integer -> Types.Track -> WidgetFor PlaylistSorter ()
@@ -172,21 +206,30 @@ rankedTrackWidget rank track = do
         <p>#{rank}: #{Types.trackName track}
     |]
 
-trackWidget :: Types.Track -> WidgetFor PlaylistSorter ()
-trackWidget track = do
-    let imageUrl = case (Types.albumImages . Types.trackAlbum) track of
-         [] -> ""
-         image:_ -> Types.imageUrl image
+trackAuthorWidget :: Types.Track -> WidgetFor PlaylistSorter ()
+trackAuthorWidget track = do
+    let artistName = (Types.artistName . head . Types.trackArtists) track
+    toWidget [whamlet|
+        <p class="track-text">#{Types.trackName track}
+        <p class="track-text">by #{artistName}
+    |]
+
+trackAudioWidget :: Types.Track -> WidgetFor PlaylistSorter ()
+trackAudioWidget track = do
     let audioUrl = case Types.trackPreviewUrl track of
          Nothing -> ""
          Just url -> url
-    let artistName = (Types.artistName . head . Types.trackArtists) track
     toWidget [whamlet|
-        <div class="inline-block padded">
-            <img src="#{imageUrl}" alt="#{Types.trackName track}", height="200", width="200">
-            <p class="track-text">#{Types.trackName track}
-            <p class="track-text">by #{artistName}
-            <audio class="preview" controls> <source src="#{audioUrl}">
+        <audio class="h-fit-to-parent" controls> <source src="#{audioUrl}">
+    |]
+
+trackImageWidget :: Types.Track -> WidgetFor PlaylistSorter ()
+trackImageWidget track = do
+    let imageUrl = case (Types.albumImages . Types.trackAlbum) track of
+         [] -> ""
+         (image:_) -> Types.imageUrl image
+    toWidget [whamlet|
+        <img src="#{imageUrl}" alt="#{Types.trackName track}", height="200", width="200">
     |]
 
 main :: IO ()

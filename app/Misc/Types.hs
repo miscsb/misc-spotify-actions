@@ -56,7 +56,7 @@ data Track = Track {
     ,   trackPreviewUrl  :: Maybe T.Text
     ,   trackTrackNumber :: Int
     ,   trackUri         :: T.Text
-    } deriving (Generic, Show)
+    } deriving (Generic, Show, Ord, Eq)
 instance ToJSON Track
 instance FromJSON Track where
     parseJSON = genericParseJSON (customOptions "track")
@@ -65,7 +65,7 @@ data Artist = Artist {
         artistName       :: T.Text
     ,   artistId         :: T.Text
     -- TODO add other fields --
-    } deriving (Generic, Show)
+    } deriving (Generic, Show, Ord, Eq)
 instance ToJSON Artist
 instance FromJSON Artist where
     parseJSON = genericParseJSON (customOptions "artist")
@@ -75,7 +75,7 @@ data Album = Album {
     ,   albumName       :: T.Text
     ,   albumId         :: T.Text
     -- TODO add other fields --
-    } deriving (Generic, Show)
+    } deriving (Generic, Show, Ord, Eq)
 instance ToJSON Album
 instance FromJSON Album where
     parseJSON = genericParseJSON (customOptions "album")
@@ -84,7 +84,7 @@ data Image = Image {
         imageUrl    :: T.Text
     ,   imageHeight :: Maybe Int
     ,   imageWidth  :: Maybe Int
-    } deriving (Generic, Show)
+    } deriving (Generic, Show, Ord, Eq)
 instance ToJSON Image
 instance FromJSON Image where
     parseJSON = genericParseJSON (customOptions "image")

@@ -41,7 +41,12 @@ estimateComparisonCount (Sort (_, len)) = round $ logBase (fromIntegral len) (2.
 estimateComparisonCount (Merge (_, lenL) (_, lenR)) = fromIntegral $ lenL + lenR
 
 estimateRemainingComparisonCount :: MergeSortHelper a -> Integer
-estimateRemainingComparisonCount (_, _, xs) = sum $ Prelude.map estimateComparisonCount xs
+estimateRemainingComparisonCount (_, Nothing, xs) = sum $ Prelude.map estimateComparisonCount xs
+estimateRemainingComparisonCount (src, Just mh, xs) = 
+    let futureMerges = estimateRemainingComparisonCount (src, Nothing, xs)
+        (_, _, (startL, lenL), (_, lenR), _, _, indexT) = mh
+        currentMerge = (lenL + lenR) - (indexT - startL)
+    in futureMerges + fromIntegral currentMerge
 
 type MergeSortHelper a = (IntMap a, Maybe (MergeHelper a), [MergeSortComputation])
     -- (source list, steps, next computations)

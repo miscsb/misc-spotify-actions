@@ -19,6 +19,9 @@ import Misc.Util
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text as T
+import qualified Data.Map as Map
+import qualified Data.List as List
+import Data.Map (Map)
 
 data PlaylistSorter = PlaylistSorter {
         matchNumber  :: IORef Integer
@@ -45,8 +48,8 @@ updateOrdering ord helper = atomicModifyIORef helper (\h -> (updateMergeSort ord
 
 updateHistory :: Maybe (Types.Track, Types.Track) -> Ordering -> IORef [(Types.Track, Types.Track)] -> IO [(Types.Track, Types.Track)]
 updateHistory Nothing _ history = atomicModifyIORef history (\h -> (h, h))
-updateHistory (Just (lesser, greater)) GT history = atomicModifyIORef history (\h -> (((lesser, greater):h), h))
-updateHistory (Just (greater, lesser)) LT history = atomicModifyIORef history (\h -> (((lesser, greater):h), h))
+updateHistory (Just (lesser, greater)) GT history = atomicModifyIORef history (\h -> ((lesser, greater):h, h))
+updateHistory (Just (greater, lesser)) LT history = atomicModifyIORef history (\h -> ((lesser, greater):h, h))
 
 resourceGenerator :: Ordering -> Handler Html
 resourceGenerator ord = defaultLayout $ do
@@ -71,7 +74,7 @@ postSorterReshuffleR = defaultLayout $ do
     mergeSort' <- liftIO $ mergeSortHelper' <$> shuffle (mergeSortResult mergeSort)
     _ <- liftIO $ atomicModifyIORef (ordering yesod) (\h -> (mergeSort', h))
     _ <- liftIO $ atomicModifyIORef (matchNumber yesod) (\c -> (1, c))
-    _ <- liftIO $ atomicModifyIORef (matchNumber yesod) (\c -> (1, c))
+    _ <- liftIO $ atomicModifyIORef (judgements yesod) (\j -> ([], j))
     redirect SorterR
 
 getSorterResultR :: Handler Html
@@ -105,7 +108,7 @@ getSorterR = defaultLayout $ do
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
-    toWidget [whamlet|
+    let leftPageTop = toWidget [whamlet|
         <h1>Playlist Sorter
         <div>
             <p class="inline-block">You are sorting the playlist #{playlist}. 
@@ -113,42 +116,23 @@ getSorterR = defaultLayout $ do
                 <input class="btn-link inline-block" type="submit" value="Restart?">
         <p>Match #{count}. Progress #{percentComplete}% (approximately #{compsRemaining} comparisons left)
         <br>
+    |] :: WidgetFor PlaylistSorter ()
+    let leftPageBottom = case nextComparison mergeSort of
+         Nothing -> redirect SorterResultR
+         Just comparison -> trackComparisonWidget comparison
+    toWidget [whamlet|
+        <div style="width: 65%; float:left;">
+            ^{leftPageTop}
+            ^{leftPageBottom}
+        <div style="width: 35%; float:right;">
+            <h3>Win-loss records
+            <div style="height: 400px; overflow-y: scroll;">
+                ^{leaderboardWidget}
     |]
-    case nextComparison mergeSort of
-        Nothing -> redirect SorterResultR
-        Just (trackLeft, trackRight) -> do
-            let leftPage = toWidget [whamlet|
-                <div class="grid-container-4">
-                    <div class="grid-item">
-                        ^{trackImageWidget  trackLeft}
-                    <div class="grid-item">
-                        ^{trackAuthorWidget trackLeft}
-                    <div class="grid-item">
-                        ^{trackAuthorWidget trackRight}
-                    <div class="grid-item">
-                        ^{trackImageWidget  trackRight}
-                <div class="grid-container-4">
-                    <div class="grid-item">
-                        ^{trackAudioWidget  trackLeft}
-                    <div class="grid-item">
-                        <form action="http://localhost:3000/sorter/left", method="POST">
-                            <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackLeft} wins">
-                    <div class="grid-item">
-                        <form action="http://localhost:3000/sorter/right", method="POST">
-                            <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackRight} wins">
-                    <div class="grid-item">
-                        ^{trackAudioWidget trackRight}
-            |] :: WidgetFor PlaylistSorter ()
-            toWidget [whamlet|
-                <div style="width: 70%; float:left">
-                    ^{leftPage}
-                <div style="width: 30%; float:right">
-                    ^{judgementHistoryWidget}
-            |]
 
 -- widgets
 bodyStyleWidget :: WidgetFor PlaylistSorter ()
-bodyStyleWidget = toWidget 
+bodyStyleWidget = toWidget
     [cassius|
         body
             margin: 40px
@@ -198,6 +182,9 @@ bodyStyleWidget = toWidget
         .grid-item
             width: 200px
             height: 200px
+        .grid-item-2
+            width: 200px
+            height: 100px
         .inline-block
             display: inline-block
         .padded
@@ -246,15 +233,62 @@ trackImageWidget track = do
         <img src="#{imageUrl}" alt="#{Types.trackName track}", height="200", width="200">
     |]
 
+trackComparisonWidget :: (Types.Track, Types.Track) -> WidgetFor PlaylistSorter ()
+trackComparisonWidget (trackLeft, trackRight) = do
+    toWidget [whamlet|
+        <div class="grid-container-4">
+            <div class="grid-item">
+                ^{trackImageWidget  trackLeft}
+            <div class="grid-item">
+                ^{trackAuthorWidget trackLeft}
+            <div class="grid-item">
+                ^{trackAuthorWidget trackRight}
+            <div class="grid-item">
+                ^{trackImageWidget  trackRight}
+        <div class="grid-container-4">
+            <div class="grid-item-2">
+                ^{trackAudioWidget  trackLeft}
+            <div class="grid-item-2">
+                <form action="http://localhost:3000/sorter/left", method="POST">
+                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackLeft} wins">
+            <div class="grid-item-2">
+                <form action="http://localhost:3000/sorter/right", method="POST">
+                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackRight} wins">
+            <div class="grid-item-2">
+                ^{trackAudioWidget trackRight}
+    |]
+
 judgementHistoryWidget :: WidgetFor PlaylistSorter ()
 judgementHistoryWidget = do
     yesod <- getYesod
     judgements <- liftIO $ readIORef $ judgements yesod
-    
-    let firstWidget = toWidget [whamlet| <p>Judgement history: |]
     let judgementItemWidget = (\(greater, lesser) -> do
          toWidget [whamlet| <p>#{Types.trackName greater} > #{Types.trackName lesser} |])
-    foldl (>>) firstWidget $ map judgementItemWidget judgements
+    foldl (>>) [whamlet||] $ map judgementItemWidget judgements
+
+leaderboardWidget :: WidgetFor PlaylistSorter ()
+leaderboardWidget = do
+    yesod <- getYesod
+    judgements <- liftIO $ readIORef $ judgements yesod
+    let combiner currMap (trackLeftId, trackRightId) = 
+         let currMap'  = Map.insertWith (\(w, l) _ -> (w+1, l)) trackLeftId  (1, 0) currMap
+             currMap'' = Map.insertWith (\(w, l) _ -> (w, l+1)) trackRightId (0, 1) currMap'
+         in currMap''
+    let winLossMap = foldl combiner Map.empty judgements :: Map Types.Track (Int, Int)
+    let comparator (_, (winL, lossL)) (_, (winR, lossR)) =
+         if winL - lossL > winR - lossR
+             then LT
+         else if winL - lossL < winR - lossR
+             then GT
+         else if winL > winR 
+             then LT
+         else if winL < winR
+             then GT
+         else EQ
+    let winLossList = List.sortBy comparator (Map.toList winLossMap) :: [(Types.Track, (Int, Int))]
+    let leaderboardItemWidget = (\(track, (wins, losses)) -> do
+         toWidget [whamlet| <p>#{wins}W / #{losses}L &nbsp;&nbsp;&nbsp;&nbsp; #{Types.trackName track} |])
+    foldl (>>) [whamlet||] $ map leaderboardItemWidget winLossList
 
 main :: IO ()
 main = do

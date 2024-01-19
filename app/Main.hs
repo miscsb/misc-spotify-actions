@@ -25,6 +25,7 @@ data PlaylistSorter = PlaylistSorter {
     ,   playlistName :: IORef String
     ,   compsTotal   :: IORef Integer
     ,   ordering     :: IORef (MergeSortHelper Types.Track)
+    ,   judgements   :: IORef [(Types.Track, Types.Track)]
 }
 mkYesod "PlaylistSorter" [parseRoutes|
     /sorter SorterR GET
@@ -42,9 +43,16 @@ incCount counter = atomicModifyIORef counter (\c -> (c+1, c))
 updateOrdering :: Ordering -> IORef (MergeSortHelper a) -> IO (MergeSortHelper a)
 updateOrdering ord helper = atomicModifyIORef helper (\h -> (updateMergeSort ord h, h))
 
+updateHistory :: Maybe (Types.Track, Types.Track) -> Ordering -> IORef [(Types.Track, Types.Track)] -> IO [(Types.Track, Types.Track)]
+updateHistory Nothing _ history = atomicModifyIORef history (\h -> (h, h))
+updateHistory (Just (lesser, greater)) GT history = atomicModifyIORef history (\h -> (((lesser, greater):h), h))
+updateHistory (Just (greater, lesser)) LT history = atomicModifyIORef history (\h -> (((lesser, greater):h), h))
+
 resourceGenerator :: Ordering -> Handler Html
 resourceGenerator ord = defaultLayout $ do
     yesod <- getYesod
+    prev <- liftIO $ readIORef $ ordering yesod
+    _ <- liftIO $ updateHistory (nextComparison prev) ord $ judgements yesod
     _ <- liftIO $ updateOrdering ord $ ordering yesod
     _ <- liftIO $ incCount $ matchNumber yesod
     redirect SorterR
@@ -104,12 +112,12 @@ getSorterR = defaultLayout $ do
             <form class="inline-block", action="http://localhost:3000/sorter/reshuffle", method="POST"> 
                 <input class="btn-link inline-block" type="submit" value="Restart?">
         <p>Match #{count}. Progress #{percentComplete}% (approximately #{compsRemaining} comparisons left)
+        <br>
     |]
     case nextComparison mergeSort of
         Nothing -> redirect SorterResultR
         Just (trackLeft, trackRight) -> do
-            toWidget [whamlet|
-                <br>
+            let leftPage = toWidget [whamlet|
                 <div class="grid-container-4">
                     <div class="grid-item">
                         ^{trackImageWidget  trackLeft}
@@ -130,6 +138,12 @@ getSorterR = defaultLayout $ do
                             <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackRight} wins">
                     <div class="grid-item">
                         ^{trackAudioWidget trackRight}
+            |] :: WidgetFor PlaylistSorter ()
+            toWidget [whamlet|
+                <div style="width: 70%; float:left">
+                    ^{leftPage}
+                <div style="width: 30%; float:right">
+                    ^{judgementHistoryWidget}
             |]
 
 -- widgets
@@ -232,6 +246,16 @@ trackImageWidget track = do
         <img src="#{imageUrl}" alt="#{Types.trackName track}", height="200", width="200">
     |]
 
+judgementHistoryWidget :: WidgetFor PlaylistSorter ()
+judgementHistoryWidget = do
+    yesod <- getYesod
+    judgements <- liftIO $ readIORef $ judgements yesod
+    
+    let firstWidget = toWidget [whamlet| <p>Judgement history: |]
+    let judgementItemWidget = (\(greater, lesser) -> do
+         toWidget [whamlet| <p>#{Types.trackName greater} > #{Types.trackName lesser} |])
+    foldl (>>) firstWidget $ map judgementItemWidget judgements
+
 main :: IO ()
 main = do
     -- load environment variables
@@ -259,12 +283,14 @@ main = do
     matchNumber'  <- newIORef 1
     compsTotal'   <- newIORef (2 + estimateRemainingComparisonCount msh)
     ordering'     <- newIORef msh
+    judgements'   <- newIORef []
 
     -- start site and (todo) open browser
     putStrLn "Starting site"
     warp 3000 $ PlaylistSorter {
         playlistName = playlistName',
-        matchNumber = matchNumber',
-        compsTotal = compsTotal',
-        ordering = ordering'
+        matchNumber  = matchNumber',
+        compsTotal   = compsTotal',
+        ordering     = ordering',
+        judgements   = judgements'
     }

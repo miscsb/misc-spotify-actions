@@ -12,8 +12,15 @@ import Data.Aeson
       FromJSON(parseJSON),
       Options(fieldLabelModifier),
       ToJSON )
+import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Text.Casing
+
+-- Type aliases
+type AccessToken = BS.ByteString
+type PlaylistId = BS.ByteString
+type UserId = BS.ByteString
+type TrackId = T.Text
 
 -- Data | Auth --
 data TokenContainer = TokenContainer {
@@ -49,7 +56,7 @@ data Track = Track {
     ,   trackDurationMs  :: Int
     ,   trackExplicit    :: Bool
     ,   trackHref        :: T.Text
-    ,   trackId          :: T.Text
+    ,   trackId          :: TrackId
     -- TODO add is_playable, linked_from, restrictions --
     ,   trackName        :: T.Text
     ,   trackPopularity  :: Double
@@ -96,7 +103,7 @@ data AudioFeatures = AudioFeaturesObject {
     ,   audioFeaturesDanceability     :: Double
     ,   audioFeaturesDurationMs       :: Int
     ,   audioFeaturesEnergy           :: Double
-    ,   audioFeaturesId               :: T.Text
+    ,   audioFeaturesId               :: TrackId
     ,   audioFeaturesInstrumentalness :: Double
     ,   audioFeaturesKey              :: Int
     ,   audioFeaturesLiveness         :: Double

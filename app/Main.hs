@@ -1,9 +1,11 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies          #-}
+{-# OPTIONS_GHC -Wno-deferred-out-of-scope-variables #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# HLINT ignore "Redundant lambda" #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 import Yesod hiding (count)
 import Configuration.Dotenv (loadFile, defaultConfig)
 import Data.IORef ( IORef, atomicModifyIORef, newIORef, readIORef )
@@ -31,11 +33,12 @@ data PlaylistSorter = PlaylistSorter {
     ,   judgements   :: IORef [(Types.Track, Types.Track)]
 }
 mkYesod "PlaylistSorter" [parseRoutes|
-    /sorter SorterR GET
-    /sorter/result SorterResultR GET
-    /sorter/reshuffle SorterReshuffleR POST
-    /sorter/left SorterLeftR POST
-    /sorter/right SorterRightR POST
+    /sorter             SorterR             GET
+    /sorter/setup       SorterSetupR        GET
+    /sorter/result      SorterResultR       GET
+    /sorter/reshuffle   SorterReshuffleR    POST
+    /sorter/left        SorterLeftR         POST
+    /sorter/right       SorterRightR        POST
 |]
 instance Yesod PlaylistSorter
 
@@ -48,8 +51,9 @@ updateOrdering ord helper = atomicModifyIORef helper (\h -> (updateMergeSort ord
 
 updateHistory :: Maybe (Types.Track, Types.Track) -> Ordering -> IORef [(Types.Track, Types.Track)] -> IO [(Types.Track, Types.Track)]
 updateHistory Nothing _ history = atomicModifyIORef history (\h -> (h, h))
-updateHistory (Just (lesser, greater)) GT history = atomicModifyIORef history (\h -> ((lesser, greater):h, h))
-updateHistory (Just (greater, lesser)) LT history = atomicModifyIORef history (\h -> ((lesser, greater):h, h))
+updateHistory (Just (greater, lesser)) GT history = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
+updateHistory (Just (lesser, greater)) LT history = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
+updateHistory _ EQ _ = error "Match tie feature is not implemented"
 
 resourceGenerator :: Ordering -> Handler Html
 resourceGenerator ord = defaultLayout $ do
@@ -70,18 +74,18 @@ postSorterRightR = resourceGenerator LT
 postSorterReshuffleR :: Handler Html
 postSorterReshuffleR = defaultLayout $ do
     yesod <- getYesod
-    mergeSort <- liftIO $ readIORef $ ordering yesod
+    mergeSort  <- liftIO $ readIORef $ ordering yesod
     mergeSort' <- liftIO $ mergeSortHelper' <$> shuffle (mergeSortResult mergeSort)
-    _ <- liftIO $ atomicModifyIORef (ordering yesod) (\h -> (mergeSort', h))
-    _ <- liftIO $ atomicModifyIORef (matchNumber yesod) (\c -> (1, c))
-    _ <- liftIO $ atomicModifyIORef (judgements yesod) (\j -> ([], j))
+    _ <- liftIO $ atomicModifyIORef (ordering    yesod) (mergeSort',)
+    _ <- liftIO $ atomicModifyIORef (matchNumber yesod) (1,)
+    _ <- liftIO $ atomicModifyIORef (judgements  yesod) ([],)
     redirect SorterR
 
 getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
     yesod <- getYesod
     mergeSort <- liftIO $ readIORef $ ordering yesod
-    playlist <- liftIO $ readIORef $ playlistName yesod
+    playlist  <- liftIO $ readIORef $ playlistName yesod
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
@@ -98,13 +102,13 @@ getSorterResultR = defaultLayout $ do
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
     yesod <- getYesod
-    count <- liftIO $ readIORef $ matchNumber yesod
-    mergeSort <- liftIO $ readIORef $ ordering yesod
-    compsTotal <- liftIO $ readIORef $ compsTotal yesod
-    playlist <- liftIO $ readIORef $ playlistName yesod
+    count        <- liftIO $ readIORef $ matchNumber yesod
+    mergeSort    <- liftIO $ readIORef $ ordering yesod
+    totalMatches <- liftIO $ readIORef $ compsTotal yesod
+    playlist     <- liftIO $ readIORef $ playlistName yesod
 
-    let compsRemaining = estimateRemainingComparisonCount mergeSort
-    let percentComplete = div (100 * (compsTotal - compsRemaining)) compsTotal
+    let remainingMatches = estimateRemainingComparisonCount mergeSort
+    let percentComplete = div (100 * (totalMatches - remainingMatches)) totalMatches
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
@@ -118,8 +122,9 @@ getSorterR = defaultLayout $ do
         <br>
     |] :: WidgetFor PlaylistSorter ()
     let leftPageBottom = case nextComparison mergeSort of
-         Nothing -> redirect SorterResultR
-         Just comparison -> trackComparisonWidget comparison
+          Nothing -> redirect SorterResultR
+          Just comparison -> trackComparisonWidget comparison
+
     toWidget [whamlet|
         <div style="width: 65%; float:left;">
             ^{leftPageTop}
@@ -217,9 +222,7 @@ trackAuthorWidget track = do
 
 trackAudioWidget :: Types.Track -> WidgetFor PlaylistSorter ()
 trackAudioWidget track = do
-    let audioUrl = case Types.trackPreviewUrl track of
-         Nothing -> ""
-         Just url -> url
+    let audioUrl = Data.Maybe.fromMaybe "" (Types.trackPreviewUrl track)
     toWidget [whamlet|
         <audio class="h-fit-to-parent" controls> <source src="#{audioUrl}">
     |]
@@ -227,8 +230,8 @@ trackAudioWidget track = do
 trackImageWidget :: Types.Track -> WidgetFor PlaylistSorter ()
 trackImageWidget track = do
     let imageUrl = case (Types.albumImages . Types.trackAlbum) track of
-         [] -> ""
-         (image:_) -> Types.imageUrl image
+          [] -> ""
+          (image:_) -> Types.imageUrl image
     toWidget [whamlet|
         <img src="#{imageUrl}" alt="#{Types.trackName track}", height="200", width="200">
     |]
@@ -261,33 +264,28 @@ trackComparisonWidget (trackLeft, trackRight) = do
 judgementHistoryWidget :: WidgetFor PlaylistSorter ()
 judgementHistoryWidget = do
     yesod <- getYesod
-    judgements <- liftIO $ readIORef $ judgements yesod
-    let judgementItemWidget = (\(greater, lesser) -> do
-         toWidget [whamlet| <p>#{Types.trackName greater} > #{Types.trackName lesser} |])
-    foldl (>>) [whamlet||] $ map judgementItemWidget judgements
+    judgementItems <- liftIO $ readIORef $ judgements yesod
+    let judgementItemWidget (greater, lesser) = do
+          toWidget [whamlet| <p>#{Types.trackName greater} > #{Types.trackName lesser} |]
+    foldl (>>) [whamlet||] $ map judgementItemWidget judgementItems
 
 leaderboardWidget :: WidgetFor PlaylistSorter ()
 leaderboardWidget = do
     yesod <- getYesod
-    judgements <- liftIO $ readIORef $ judgements yesod
-    let combiner currMap (trackLeftId, trackRightId) = 
-         let currMap'  = Map.insertWith (\(w, l) _ -> (w+1, l)) trackLeftId  (1, 0) currMap
-             currMap'' = Map.insertWith (\(w, l) _ -> (w, l+1)) trackRightId (0, 1) currMap'
-         in currMap''
-    let winLossMap = foldl combiner Map.empty judgements :: Map Types.Track (Int, Int)
-    let comparator (_, (winL, lossL)) (_, (winR, lossR)) =
-         if winL - lossL > winR - lossR
-             then LT
-         else if winL - lossL < winR - lossR
-             then GT
-         else if winL > winR 
-             then LT
-         else if winL < winR
-             then GT
-         else EQ
+    judgementItems <- liftIO $ readIORef $ judgements yesod
+    let combiner (trackLeftId, trackRightId) =
+          Map.insertWith (\(w, l) _ -> (w+1, l)) trackLeftId  (1, 0) .
+          Map.insertWith (\(w, l) _ -> (w, l+1)) trackRightId (0, 1)
+    let winLossMap = foldl (flip combiner) Map.empty judgementItems :: Map Types.Track (Int, Int)
+    let comparator (_, (winL, lossL)) (_, (winR, lossR))
+          | winL - lossL > winR - lossR = LT
+          | winL - lossL < winR - lossR = GT
+          | winL > winR = LT
+          | winL < winR = GT
+          | otherwise = EQ
     let winLossList = List.sortBy comparator (Map.toList winLossMap) :: [(Types.Track, (Int, Int))]
-    let leaderboardItemWidget = (\(track, (wins, losses)) -> do
-         toWidget [whamlet| <p>#{wins}W / #{losses}L &nbsp;&nbsp;&nbsp;&nbsp; #{Types.trackName track} |])
+    let leaderboardItemWidget (track, (wins, losses)) = do
+          toWidget [whamlet| <p>#{wins}W / #{losses}L &nbsp;&nbsp;&nbsp;&nbsp; #{Types.trackName track} |]
     foldl (>>) [whamlet||] $ map leaderboardItemWidget winLossList
 
 main :: IO ()

@@ -25,15 +25,19 @@ sortPlaylistByEnergy = do
 
     putStrLn "Authorizing"
     let scope = "user-library-read playlist-modify-public playlist-modify-private"
-    accessToken <- fmap (encodeUtf8 . T.pack) (SP.authWithScopeRequest username clientId clientSecret scope redirectUri)
+    accessTokenMaybe <- SP.authWithScope username clientId clientSecret scope redirectUri
 
-    putStrLn "Sorting playlist"
-    SP.sortPlaylistOnFeature 
-        Types.audioFeaturesEnergy 
-        ((encodeUtf8 . T.pack) sourcePlaylist) 
-        "sorted by energy level" 
-        accessToken 
-        ((encodeUtf8 . T.pack) username)
+    case accessTokenMaybe of
+        Nothing -> do
+            putStrLn "Could not authenticate."
+        Just accessToken -> do
+            putStrLn "Sorting playlist"
+            SP.sortPlaylistOnFeature 
+                accessToken
+                Types.audioFeaturesEnergy 
+                ((encodeUtf8 . T.pack) sourcePlaylist) 
+                "sorted by energy level" 
+                ((encodeUtf8 . T.pack) username)
 
 groupPlaylistByKey :: IO ()
 groupPlaylistByKey = do
@@ -46,31 +50,36 @@ groupPlaylistByKey = do
     -- Get token with playlist read permissions. Calls Python script.
     putStrLn "Authorizing"
     let scope = "user-library-read playlist-modify-public playlist-modify-private"
-    accessToken <- fmap (encodeUtf8 . T.pack) (SP.authWithScopeRequest username clientId clientSecret scope redirectUri)
+    accessTokenMaybe <- SP.authWithScope username clientId clientSecret scope redirectUri
 
-    -- Get tracks to sort
-    putStrLn "Collecting tracks"
-    playlistItems <- SP.getPlaylistItems ((encodeUtf8 . T.pack) sourcePlaylist) accessToken
+    case accessTokenMaybe of
+        Nothing -> do
+            putStrLn "Could not authenticate."
+        Just accessToken -> do
+            -- Get tracks to sort
+            putStrLn "Collecting tracks"
+            playlistItems <- SP.getPlaylistItems ((encodeUtf8 . T.pack) sourcePlaylist) accessToken
 
-    -- Get tracks' audio analyses
-    putStrLn "Analyzing tracks"
-    audioFeatures <- SP.getAudioFeatures (map (Types.trackId . Types.playlistItemTrack) playlistItems) accessToken
+            -- Get tracks' audio analyses
+            putStrLn "Analyzing tracks"
+            audioFeatures <- SP.getAudioFeatures accessToken (map (Types.trackId . Types.playlistItemTrack) playlistItems)
 
-    -- Group tracks into keys and sort by tempo
-    putStrLn "Sorting tracks"
-    let grouped = Data.List.groupBy 
-            (\ a b -> Types.audioFeaturesKey a == Types.audioFeaturesKey b) 
-            $ sortOn Types.audioFeaturesKey audioFeatures
-    let groupedSorted = map (sortOn Types.audioFeaturesTempo) grouped
-    let byKey = map 
-            (\xs -> ((SP.getKey . Types.audioFeaturesKey) (head xs), map Types.audioFeaturesId xs)) 
-            groupedSorted
+            -- Group tracks into keys and sort by tempo
+            putStrLn "Sorting tracks"
+            let grouped = Data.List.groupBy 
+                    (\ a b -> Types.audioFeaturesKey a == Types.audioFeaturesKey b) 
+                    $ sortOn Types.audioFeaturesKey audioFeatures
+            let groupedSorted = map (sortOn Types.audioFeaturesTempo) grouped
+            let byKey = map 
+                    (\xs -> ((SP.getKey . Types.audioFeaturesKey) (head xs), map Types.audioFeaturesId xs)) 
+                    groupedSorted
 
-    -- Create playlists for each track
-    putStrLn "Creating playlists"
-    forM_ byKey (\(songKey, ids) -> 
-        SP.generatePlaylistFromList ids 
-            ("Key of " <> songKey) 
-            ("Songs that Spotify says are in " <> songKey <> ".") 
-            accessToken 
-            ((encodeUtf8 . T.pack) username))
+            -- Create playlists for each track
+            putStrLn "Creating playlists"
+            forM_ byKey (\(songKey, ids) -> 
+                SP.generatePlaylistFromList 
+                    accessToken 
+                    ids
+                    ((encodeUtf8 . T.pack) username)
+                    ("Key of " <> songKey) 
+                    ("Songs that Spotify says are in " <> songKey <> "."))

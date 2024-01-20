@@ -6,6 +6,7 @@
 {-# OPTIONS_GHC -Wno-deferred-out-of-scope-variables #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 import Yesod hiding (count)
 import Configuration.Dotenv (loadFile, defaultConfig)
 import Data.IORef ( IORef, atomicModifyIORef, newIORef, readIORef )
@@ -19,28 +20,83 @@ import Misc.Util
       mergeSortResult,
       nextComparison, estimateRemainingComparisonCount )
 import System.Environment ( getEnv )
-import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Encoding (encodeUtf8, decodeLatin1)
 import qualified Data.Text as T
 import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.Map (Map)
+import Data.Maybe (fromMaybe)
 
 data PlaylistSorter = PlaylistSorter {
         matchNumber  :: IORef Integer
-    ,   playlistName :: IORef String
+    ,   currPlaylist :: IORef (Types.PlaylistId, T.Text)
     ,   compsTotal   :: IORef Integer
     ,   ordering     :: IORef (MergeSortHelper Types.Track)
     ,   judgements   :: IORef [(Types.Track, Types.Track)]
 }
 mkYesod "PlaylistSorter" [parseRoutes|
     /sorter             SorterR             GET
-    /sorter/setup       SorterSetupR        GET
     /sorter/result      SorterResultR       GET
+    /sorter/setup       SorterSetupR        GET POST
     /sorter/reshuffle   SorterReshuffleR    POST
     /sorter/left        SorterLeftR         POST
     /sorter/right       SorterRightR        POST
 |]
 instance Yesod PlaylistSorter
+instance RenderMessage PlaylistSorter FormMessage where
+    renderMessage _ _ = defaultFormMessage
+
+data PlaylistSortParams = PlaylistSortParams {
+        playlistUrl :: T.Text
+    } deriving Show
+
+playlistSortParamsForm :: Html -> MForm Handler (FormResult PlaylistSortParams, Widget)
+playlistSortParamsForm = renderDivs $ PlaylistSortParams
+    <$> areq textField "Playlist URL (must be public)" Nothing
+
+-- The GET handler displays the form
+getSorterSetupR :: Handler Html
+getSorterSetupR = do
+    (widget, enctype) <- generateFormPost playlistSortParamsForm
+    defaultLayout $ do
+        setTitle "Playlist Sorter"
+        bodyStyleWidget
+        [whamlet|
+            <h1>Playlist Sorter
+            <form method=post action=@{SorterSetupR} enctype=#{enctype}>
+                ^{widget}
+                <button class="btn-link">Let's Sort!
+        |]
+
+-- The POST handler processes the form. If it is successful, it displays the
+-- parsed person. Otherwise, it displays the form again with error messages.
+postSorterSetupR :: Handler Html
+postSorterSetupR = do
+    ((result, _), _) <- runFormPost playlistSortParamsForm
+    case result of
+        FormSuccess playlistSortParams -> do
+            yesod <- getYesod
+            clientId     <- liftIO $ getEnv "CLIENT_ID"
+            clientSecret <- liftIO $ getEnv "CLIENT_SECRET"
+            accessTokenMaybe <- liftIO $ SP.authWithClientCredentials clientId clientSecret
+            case accessTokenMaybe of
+                Just accessToken -> do
+                    let playlistId = encodeUtf8 . parsePlaylistInput $ playlistUrl playlistSortParams
+                    playlistNameMaybe <- liftIO $ SP.getPlaylistName accessToken playlistId
+                    case playlistNameMaybe of
+                        Just playlistName -> do
+                            tracks <- liftIO $ (=<<) shuffle (map Types.playlistItemTrack
+                                <$> SP.getPlaylistItems accessToken playlistId)
+                            let msh = mergeSortHelper' tracks :: MergeSortHelper Types.Track
+                            _ <- liftIO $ atomicModifyIORef (currPlaylist yesod) ((playlistId, playlistName),)
+                            _ <- liftIO $ atomicModifyIORef (matchNumber  yesod) (1,)
+                            _ <- liftIO $ atomicModifyIORef (compsTotal   yesod) (2 + estimateRemainingComparisonCount msh,)
+                            _ <- liftIO $ atomicModifyIORef (ordering     yesod) (msh,)
+                            _ <- liftIO $ atomicModifyIORef (judgements   yesod) ([],)
+                            redirect SorterR
+                        _ -> redirect SorterR
+                _ -> redirect SorterR
+        _ -> redirect SorterR
 
 -- state mutators
 incCount :: (Num a, Show a) => IORef a -> IO a
@@ -85,16 +141,17 @@ getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
     yesod <- getYesod
     mergeSort <- liftIO $ readIORef $ ordering yesod
-    playlist  <- liftIO $ readIORef $ playlistName yesod
+    (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
     let firstWidget = toWidget [whamlet|
         <h1>Playlist Sorter
         <div>
-            <p>You sorted the playlist #{playlist}.
-            <form class="inline-block", action="http://localhost:3000/sorter/reshuffle", method="POST"> 
+            <p>You sorted the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
+            <form class="inline-block", action="@{SorterReshuffleR}", method="POST"> 
                 <input class="btn-link inline-block" type="submit" value="Restart?">
+            <a class="btn-link", href="@{SorterSetupR}">Change Playlist?</a>
         <p>These are the results of the sort:
     |]
     foldl (>>) firstWidget $ zipWith rankedTrackWidget [1..] (mergeSortResult mergeSort)
@@ -105,7 +162,7 @@ getSorterR = defaultLayout $ do
     count        <- liftIO $ readIORef $ matchNumber yesod
     mergeSort    <- liftIO $ readIORef $ ordering yesod
     totalMatches <- liftIO $ readIORef $ compsTotal yesod
-    playlist     <- liftIO $ readIORef $ playlistName yesod
+    (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
 
     let remainingMatches = estimateRemainingComparisonCount mergeSort
     let percentComplete = div (100 * (totalMatches - remainingMatches)) totalMatches
@@ -115,10 +172,11 @@ getSorterR = defaultLayout $ do
     let leftPageTop = toWidget [whamlet|
         <h1>Playlist Sorter
         <div>
-            <p class="inline-block">You are sorting the playlist #{playlist}. 
-            <form class="inline-block", action="http://localhost:3000/sorter/reshuffle", method="POST"> 
+            <p class="inline-block">You are sorting the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
+            <form class="inline-block", action="@{SorterReshuffleR}", method="POST"> 
                 <input class="btn-link inline-block" type="submit" value="Restart?">
-        <p>Match #{count}. Progress #{percentComplete}% (approximately #{compsRemaining} comparisons left)
+            <a class="btn-link", href="@{SorterSetupR}">Sort Different Playlist?</a>
+        <p>Match #{count}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
         <br>
     |] :: WidgetFor PlaylistSorter ()
     let leftPageBottom = case nextComparison mergeSort of
@@ -163,7 +221,7 @@ bodyStyleWidget = toWidget
             outline: none
             background: none
             cursor: pointer
-            color: #000000
+            color: black
             padding: 0px
             text-decoration: underline
             font-family: inherit
@@ -197,7 +255,7 @@ bodyStyleWidget = toWidget
             padding-left: 40px
             padding-bottom: 20px
         .track-text
-            width: 100%
+            width: 80%
             text-align: left
             white-space: normal
             margin-left: 20px
@@ -252,10 +310,10 @@ trackComparisonWidget (trackLeft, trackRight) = do
             <div class="grid-item-2">
                 ^{trackAudioWidget  trackLeft}
             <div class="grid-item-2">
-                <form action="http://localhost:3000/sorter/left", method="POST">
+                <form action="@{SorterLeftR}", method="POST">
                     <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackLeft} wins">
             <div class="grid-item-2">
-                <form action="http://localhost:3000/sorter/right", method="POST">
+                <form action="@{SorterRightR}", method="POST">
                     <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackRight} wins">
             <div class="grid-item-2">
                 ^{trackAudioWidget trackRight}
@@ -274,8 +332,9 @@ leaderboardWidget = do
     yesod <- getYesod
     judgementItems <- liftIO $ readIORef $ judgements yesod
     let combiner (trackLeftId, trackRightId) =
-          Map.insertWith (\(w, l) _ -> (w+1, l)) trackLeftId  (1, 0) .
-          Map.insertWith (\(w, l) _ -> (w, l+1)) trackRightId (0, 1)
+          Map.insertWith f trackLeftId  (1, 0) .
+          Map.insertWith f trackRightId (0, 1)
+            where f (w, l) (dw, dl) = (w+dw, l+dl)
     let winLossMap = foldl (flip combiner) Map.empty judgementItems :: Map Types.Track (Int, Int)
     let comparator (_, (winL, lossL)) (_, (winR, lossR))
           | winL - lossL > winR - lossR = LT
@@ -294,24 +353,23 @@ main = do
     loadFile defaultConfig
     clientId       <- getEnv "CLIENT_ID"
     clientSecret   <- getEnv "CLIENT_SECRET"
-    redirectUri    <- getEnv "REDIRECT_URI"
-    username       <- getEnv "USERNAME"
-    sourcePlaylist <- getEnv "SOURCE_PLAYLIST"
+    sourcePlaylist <- getEnv "SOURCE_PLAYLIST" -- default playlist
 
     -- authorize
     putStrLn "Authorizing"
-    let scope = "user-library-read"
-    accessToken <- fmap (encodeUtf8 . T.pack) (SP.authWithScopeRequest username clientId clientSecret scope redirectUri)
+    accessTokenMaybe <- SP.authWithClientCredentials clientId clientSecret
+    let accessToken = fromMaybe (error "could not authenticate") accessTokenMaybe
 
     -- load playlist
     putStrLn "Loading playlist"
     tracks <- (=<<) shuffle (map Types.playlistItemTrack
-        <$> SP.getPlaylistItems (encodeUtf8 $ T.pack sourcePlaylist) accessToken)
+        <$> SP.getPlaylistItems accessToken (encodeUtf8 $ T.pack sourcePlaylist))
     let msh = mergeSortHelper' tracks :: MergeSortHelper Types.Track
+
 
     -- initiate vars
     putStrLn "Intiating variables"
-    playlistName' <- newIORef sourcePlaylist
+    currPlaylist' <- newIORef ((encodeUtf8 . T.pack) sourcePlaylist, "Today's Top Hits")
     matchNumber'  <- newIORef 1
     compsTotal'   <- newIORef (2 + estimateRemainingComparisonCount msh)
     ordering'     <- newIORef msh
@@ -320,9 +378,16 @@ main = do
     -- start site and (todo) open browser
     putStrLn "Starting site"
     warp 3000 $ PlaylistSorter {
-        playlistName = playlistName',
+        currPlaylist = currPlaylist',
         matchNumber  = matchNumber',
         compsTotal   = compsTotal',
         ordering     = ordering',
         judgements   = judgements'
     }
+
+parsePlaylistInput :: T.Text -> T.Text
+parsePlaylistInput input =
+    let str   = last (T.splitOn "playlist/" input)
+        str'  = last (T.splitOn "playlist:" str)
+        str'' = head (T.splitOn "?" str')
+    in str''

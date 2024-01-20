@@ -34,9 +34,12 @@ executable misc-spotify-actions
                       dotenv ^>= 0.11.0.2,
                       casing ^>= 0.1.4.1,
                       yesod,
+                      yesod-form,
                       array,
                       random,
                       containers,
-                      blaze-markup
+                      blaze-markup,
+                      split,
+                      shakespeare
     hs-source-dirs:   app
     default-language: Haskell2010

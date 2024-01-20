@@ -48,7 +48,7 @@ spotifyDefaultRequest token requestMethod = setRequestMethod requestMethod
     $ setRequestSecure True
     $ defaultRequest
 
--- Authentication
+-- authentication
 authClientCredentialsRequest :: BS.ByteString -> BS.ByteString -> Request
 authClientCredentialsRequest clientId clientSecret = setRequestMethod "POST"
     $ setRequestHost "accounts.spotify.com"
@@ -78,7 +78,7 @@ authWithScope username clientId clientSecret scope redirectUri = do
         (ExitSuccess, token, _) -> Just (encodeUtf8 $ T.pack token)
         (ExitFailure _, _, _) -> Nothing
 
--- playlist manipulations
+-- playlist getters
 getPlaylistItems :: Types.AccessToken -> Types.PlaylistId -> IO [Types.PlaylistItem]
 getPlaylistItems token playlistId = getPlaylistItems_ token playlistId 0
 
@@ -94,6 +94,32 @@ getPlaylistItems_ token playlistId offset = do
         Nothing -> return []
     return $ list ++ nextEntries
 
+getPlaylistName :: Types.AccessToken -> Types.PlaylistId -> IO (Maybe T.Text)
+getPlaylistName token playlistId = do
+    let request = setRequestQueryString [("fields", Just "name")]
+          $ setRequestPath ("/v1/playlists/" <> playlistId)
+          $ spotifyDefaultRequest token "GET"
+    response <- getResponseBody <$> httpJSON request
+    return $ case KM.lookup "name" response of
+        Just (String name) -> Just name
+        _ -> Nothing
+
+-- playlist mutators
+addSongsToPlaylist :: Types.AccessToken -> [Types.TrackId] -> T.Text -> IO ()
+addSongsToPlaylist token songIds playlistId = do
+    let batches = createIndexedBatches 50 songIds
+    mapM_ (\(offset, batch) -> addSongsToPlaylist_ token batch playlistId offset) batches
+
+addSongsToPlaylist_ :: Types.AccessToken -> [Types.TrackId] -> T.Text -> Int -> IO ()
+addSongsToPlaylist_ token songIds playlistId offset = do
+    let uriString = encodeUtf8 (T.intercalate "," (map ("spotify:track:" <>) songIds))
+    let requestAdd = setRequestQueryString [ ("uris", Just uriString), ("position", Just ((encodeUtf8 . T.pack . show) offset)) ]
+          $ setRequestPath ("/v1/playlists/" <> encodeUtf8 playlistId <> "/tracks")
+          $ spotifyDefaultRequest "POST" token
+    _ <- httpLBS requestAdd
+    return ()
+
+-- playlist creators
 generatePlaylistFromList :: Types.AccessToken -> [Types.TrackId] -> Types.UserId -> T.Text -> T.Text -> IO ()
 generatePlaylistFromList token songIds userId name description = do
     let body = RequestBodyBS
@@ -109,20 +135,6 @@ generatePlaylistFromList token songIds userId name description = do
         Just (String playlistId) -> do
             addSongsToPlaylist token songIds playlistId
         _ -> print ("Could not create playlist " <> name)
-
-addSongsToPlaylist :: Types.AccessToken -> [Types.TrackId] -> T.Text -> IO ()
-addSongsToPlaylist token songIds playlistId = do
-    let batches = createIndexedBatches 50 songIds
-    mapM_ (\(offset, batch) -> addSongsToPlaylist_ token batch playlistId offset) batches
-
-addSongsToPlaylist_ :: Types.AccessToken -> [Types.TrackId] -> T.Text -> Int -> IO ()
-addSongsToPlaylist_ token songIds playlistId offset = do
-    let uriString = encodeUtf8 (T.intercalate "," (map ("spotify:track:" <>) songIds))
-    let requestAdd = setRequestQueryString [ ("uris", Just uriString), ("position", Just ((encodeUtf8 . T.pack . show) offset)) ]
-          $ setRequestPath ("/v1/playlists/" <> encodeUtf8 playlistId <> "/tracks")
-          $ spotifyDefaultRequest "POST" token
-    _ <- httpLBS requestAdd
-    return ()
 
 sortPlaylistOnFeature :: Ord a => Types.AccessToken -> (Types.AudioFeatures -> a) -> Types.PlaylistId -> T.Text -> Types.UserId -> IO ()
 sortPlaylistOnFeature token sorter playlistId newPlaylistName userId = do

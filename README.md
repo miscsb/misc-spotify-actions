@@ -2,7 +2,7 @@
 
 Interactive Spotify playlist sorter. The user acts as the judge for a sequence of pairwise matches, eventually providing enough information to rank every song in a playlist.
 
-This sorter uses [Mergesort](https://en.wikipedia.org/wiki/Merge_sort), which has a time complexity of $O(n \log_2 n)$.
+This sorter uses bottom-up [Mergesort](https://en.wikipedia.org/wiki/Merge_sort), which has a time complexity of $O(n \log_2 n)$.
 
 Inspired by [Touhou Project Character Sorter](https://execfera.github.io/charasort/).
 

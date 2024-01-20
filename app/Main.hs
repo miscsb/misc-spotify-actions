@@ -13,12 +13,6 @@ import Data.IORef ( IORef, atomicModifyIORef, newIORef, readIORef )
 import qualified Misc.Types as Types
 import qualified Misc.Spotify as SP
 import Misc.Util
-    ( MergeSortHelper,
-      shuffle,
-      mergeSortHelper',
-      updateMergeSort,
-      mergeSortResult,
-      nextComparison, estimateRemainingComparisonCount )
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8, decodeLatin1)
 import qualified Data.Text as T
@@ -32,8 +26,7 @@ import Control.Concurrent
 data PlaylistSorter = PlaylistSorter {
         matchNumber  :: IORef Integer
     ,   currPlaylist :: IORef (Types.PlaylistId, T.Text)
-    ,   compsTotal   :: IORef Integer
-    ,   ordering     :: IORef (MergeSortHelper Types.Track)
+    ,   mergeSort    :: IORef (MergeSortState Types.Track)
     ,   judgements   :: IORef [(Types.Track, Types.Track)]
 }
 mkYesod "PlaylistSorter" [parseRoutes|
@@ -89,11 +82,10 @@ postSorterSetupR = do
                         Just playlistName -> do
                             tracks <- liftIO $ (=<<) shuffle (map Types.playlistItemTrack
                                 <$> SP.getPlaylistItems accessToken playlistId)
-                            let msh = mergeSortHelper' tracks :: MergeSortHelper Types.Track
+                            let mergeSort' = initialMergeSortState tracks :: MergeSortState Types.Track
                             _ <- liftIO $ atomicModifyIORef (currPlaylist yesod) ((playlistId, playlistName),)
                             _ <- liftIO $ atomicModifyIORef (matchNumber  yesod) (1,)
-                            _ <- liftIO $ atomicModifyIORef (compsTotal   yesod) (2 + estimateRemainingComparisonCount msh,)
-                            _ <- liftIO $ atomicModifyIORef (ordering     yesod) (msh,)
+                            _ <- liftIO $ atomicModifyIORef (mergeSort    yesod) (mergeSort',)
                             _ <- liftIO $ atomicModifyIORef (judgements   yesod) ([],)
                             redirect SorterR
                         _ -> redirect SorterR
@@ -104,9 +96,6 @@ postSorterSetupR = do
 incCount :: (Num a, Show a) => IORef a -> IO a
 incCount counter = atomicModifyIORef counter (\c -> (c+1, c))
 
-updateOrdering :: Ordering -> IORef (MergeSortHelper a) -> IO (MergeSortHelper a)
-updateOrdering ord helper = atomicModifyIORef helper (\h -> (updateMergeSort ord h, h))
-
 updateHistory :: Maybe (Types.Track, Types.Track) -> Ordering -> IORef [(Types.Track, Types.Track)] -> IO [(Types.Track, Types.Track)]
 updateHistory Nothing _ history = atomicModifyIORef history (\h -> (h, h))
 updateHistory (Just (greater, lesser)) GT history = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
@@ -116,9 +105,9 @@ updateHistory _ EQ _ = error "Match tie feature is not implemented"
 resourceGenerator :: Ordering -> Handler Html
 resourceGenerator ord = defaultLayout $ do
     yesod <- getYesod
-    prev <- liftIO $ readIORef $ ordering yesod
-    _ <- liftIO $ updateHistory (nextComparison prev) ord $ judgements yesod
-    _ <- liftIO $ updateOrdering ord $ ordering yesod
+    mergeSort' <- liftIO $ readIORef $ mergeSort yesod
+    _ <- liftIO $ updateHistory (currentMergeSortComparison mergeSort') ord $ judgements yesod
+    _ <- liftIO $ atomicModifyIORef (mergeSort yesod) (stepMergeSort mergeSort' ord,)
     _ <- liftIO $ incCount $ matchNumber yesod
     redirect SorterR
 
@@ -132,17 +121,25 @@ postSorterRightR = resourceGenerator LT
 postSorterReshuffleR :: Handler Html
 postSorterReshuffleR = defaultLayout $ do
     yesod <- getYesod
-    mergeSort  <- liftIO $ readIORef $ ordering yesod
-    mergeSort' <- liftIO $ mergeSortHelper' <$> shuffle (mergeSortResult mergeSort)
-    _ <- liftIO $ atomicModifyIORef (ordering    yesod) (mergeSort',)
-    _ <- liftIO $ atomicModifyIORef (matchNumber yesod) (1,)
-    _ <- liftIO $ atomicModifyIORef (judgements  yesod) ([],)
-    redirect SorterR
+    clientId     <- liftIO $ getEnv "CLIENT_ID"
+    clientSecret <- liftIO $ getEnv "CLIENT_SECRET"
+    accessTokenMaybe <- liftIO $ SP.authWithClientCredentials clientId clientSecret
+    (playlistId, _) <- liftIO $ readIORef $ currPlaylist yesod
+    case accessTokenMaybe of
+        Just accessToken -> do
+            tracks <- liftIO $ (=<<) shuffle (map Types.playlistItemTrack
+                <$> SP.getPlaylistItems accessToken playlistId)
+            let mergeSort' = initialMergeSortState tracks :: MergeSortState Types.Track
+            _ <- liftIO $ atomicModifyIORef (matchNumber  yesod) (1,)
+            _ <- liftIO $ atomicModifyIORef (mergeSort    yesod) (mergeSort',)
+            _ <- liftIO $ atomicModifyIORef (judgements   yesod) ([],)
+            redirect SorterR
+        _ -> redirect SorterR
 
 getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
     yesod <- getYesod
-    mergeSort <- liftIO $ readIORef $ ordering yesod
+    mergeSort' <- liftIO $ readIORef $ mergeSort yesod
     (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
 
     setTitle "Playlist Sorter"
@@ -156,18 +153,19 @@ getSorterResultR = defaultLayout $ do
             <a class="btn-link", href="@{SorterSetupR}">Change Playlist?</a>
         <p>These are the results of the sort:
     |]
-    foldl (>>) firstWidget $ zipWith rankedTrackWidget [1..] (mergeSortResult mergeSort)
+    case mergeSort' of
+        MergeSortComplete sorted -> foldl (>>) firstWidget $ zipWith rankedTrackWidget [1..] sorted
+        MergeSortIncomplete _ -> toWidget [whamlet| <p>Sort incomplete! |]
 
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
     yesod <- getYesod
-    count        <- liftIO $ readIORef $ matchNumber yesod
-    mergeSort    <- liftIO $ readIORef $ ordering yesod
-    totalMatches <- liftIO $ readIORef $ compsTotal yesod
+    mergeSort'   <- liftIO $ readIORef $ mergeSort   yesod
+    matchNumber' <- liftIO $ readIORef $ matchNumber yesod
     (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
 
-    let remainingMatches = estimateRemainingComparisonCount mergeSort
-    let percentComplete = div (100 * (totalMatches - remainingMatches)) totalMatches
+    let remainingMatches = estimateComparisonsLeft mergeSort'
+    let percentComplete = div (100 * matchNumber') (fromIntegral remainingMatches + matchNumber')
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
@@ -178,10 +176,10 @@ getSorterR = defaultLayout $ do
             <form class="inline-block", action="@{SorterReshuffleR}", method="POST"> 
                 <input class="btn-link inline-block" type="submit" value="Restart?">
             <a class="btn-link", href="@{SorterSetupR}">Sort Different Playlist?</a>
-        <p>Match #{count}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
+        <p>Match #{matchNumber'}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
         <br>
     |] :: WidgetFor PlaylistSorter ()
-    let leftPageBottom = case nextComparison mergeSort of
+    let leftPageBottom = case currentMergeSortComparison mergeSort' of
           Nothing -> redirect SorterResultR
           Just comparison -> trackComparisonWidget comparison
 
@@ -324,20 +322,20 @@ trackComparisonWidget (trackLeft, trackRight) = do
 judgementHistoryWidget :: WidgetFor PlaylistSorter ()
 judgementHistoryWidget = do
     yesod <- getYesod
-    judgementItems <- liftIO $ readIORef $ judgements yesod
+    judgements' <- liftIO $ readIORef $ judgements yesod
     let judgementItemWidget (greater, lesser) = do
           toWidget [whamlet| <p>#{Types.trackName greater} > #{Types.trackName lesser} |]
-    foldl (>>) [whamlet||] $ map judgementItemWidget judgementItems
+    foldl (>>) [whamlet||] $ map judgementItemWidget judgements'
 
 leaderboardWidget :: WidgetFor PlaylistSorter ()
 leaderboardWidget = do
     yesod <- getYesod
-    judgementItems <- liftIO $ readIORef $ judgements yesod
+    judgements' <- liftIO $ readIORef $ judgements yesod
     let combiner (trackLeftId, trackRightId) =
           Map.insertWith f trackLeftId  (1, 0) .
           Map.insertWith f trackRightId (0, 1)
             where f (w, l) (dw, dl) = (w+dw, l+dl)
-    let winLossMap = foldl (flip combiner) Map.empty judgementItems :: Map Types.Track (Int, Int)
+    let winLossMap = foldl (flip combiner) Map.empty judgements' :: Map Types.Track (Int, Int)
     let comparator (_, (winL, lossL)) (_, (winR, lossR))
           | winL - lossL > winR - lossR = LT
           | winL - lossL < winR - lossR = GT
@@ -366,15 +364,14 @@ main = do
     putStrLn "Loading playlist"
     tracks <- (=<<) shuffle (map Types.playlistItemTrack
         <$> SP.getPlaylistItems accessToken (encodeUtf8 $ T.pack sourcePlaylist))
-    let msh = mergeSortHelper' tracks :: MergeSortHelper Types.Track
+    let mergeSort' = initialMergeSortState tracks :: MergeSortState Types.Track
 
 
     -- initiate vars
     putStrLn "Intiating variables"
     currPlaylist' <- newIORef ((encodeUtf8 . T.pack) sourcePlaylist, "Today's Top Hits")
     matchNumber'  <- newIORef 1
-    compsTotal'   <- newIORef (2 + estimateRemainingComparisonCount msh)
-    ordering'     <- newIORef msh
+    mergeSort''   <- newIORef mergeSort'
     judgements'   <- newIORef []
 
     _ <- forkIO (do
@@ -386,8 +383,7 @@ main = do
     warp 3000 $ PlaylistSorter {
         currPlaylist = currPlaylist',
         matchNumber  = matchNumber',
-        compsTotal   = compsTotal',
-        ordering     = ordering',
+        mergeSort    = mergeSort'',
         judgements   = judgements'
     }
 

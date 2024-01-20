@@ -40,6 +40,7 @@ executable misc-spotify-actions
                       containers,
                       blaze-markup,
                       split,
-                      shakespeare
+                      shakespeare,
+                      open-browser ^>= 0.2.1.0
     hs-source-dirs:   app
     default-language: Haskell2010

@@ -26,6 +26,8 @@ import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
+import Web.Browser
+import Control.Concurrent
 
 data PlaylistSorter = PlaylistSorter {
         matchNumber  :: IORef Integer
@@ -374,6 +376,10 @@ main = do
     compsTotal'   <- newIORef (2 + estimateRemainingComparisonCount msh)
     ordering'     <- newIORef msh
     judgements'   <- newIORef []
+
+    _ <- forkIO (do
+        _ <- threadDelay 1000
+        () <$ openBrowser "http://localhost:3000/sorter")
 
     -- start site and (todo) open browser
     putStrLn "Starting site"

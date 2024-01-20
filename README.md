@@ -1,12 +1,35 @@
-Haskell code to sort a Spotify playlist into different keys.
-Track information is provided by Spotify and may not be 100% accurate.
+# Playlist Sorter
 
-Make sure to create a `.env` file as follows:
+Interactive Spotify playlist sorter. The user acts as the judge for a sequence of pairwise matches, eventually providing enough information to rank every song in a playlist.
 
-```env
+This sorter uses [Mergesort](https://en.wikipedia.org/wiki/Merge_sort), which has a time complexity of $O(n \log_2 n)$.
+
+### Running the website
+
+Create a `.env` file with the following information:
+
+```sh
+# required fields
+# see Spotify web API docs
 CLIENT_ID=...
-CLIENT_SECRET=...
-REDIRECT_URI=...    (see Spotify Web API docs)
-USERNAME=...        (your username)
-SOURCE_PLAYLIST=... (any playlist id)
+CLIENT_SECRET=...   
+
+# required for any authorization method other than client credentials
+# see Spotify web API docs
+REDIRECT_URI=...
+USERNAME=...
+
+# used for some examples here
+# this should be a playlist id (not url or uri)
+SOURCE_PLAYLIST=...
 ```
+
+Then, run `cabal run` in the directory containing this file. When the web server has started (i.e. `[Info#yesod-core] Application launched` shows up in the log), open `localhost:3000/sorter` in your browser.
+
+### Screenshots
+
+##### Sorter
+<image src="images/example-sorter.png">
+
+##### Results Page
+<image src="images/example-result.png">

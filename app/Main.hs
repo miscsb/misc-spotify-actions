@@ -9,7 +9,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 import Yesod hiding (count)
 import Configuration.Dotenv (loadFile, defaultConfig)
-import Data.IORef ( IORef, atomicModifyIORef, newIORef, readIORef )
+import Data.IORef ( IORef, atomicModifyIORef, atomicWriteIORef, newIORef, readIORef )
 import qualified Misc.Types as Types
 import qualified Misc.Spotify as SP
 import Misc.Util
@@ -33,11 +33,13 @@ mkYesod "PlaylistSorter" [parseRoutes|
     /sorter             SorterR             GET
     /sorter/result      SorterResultR       GET
     /sorter/setup       SorterSetupR        GET POST
-    /sorter/reshuffle   SorterReshuffleR    POST
+    /sorter/reshuffle   SorterReshuffleR    GET
     /sorter/left        SorterLeftR         POST
     /sorter/right       SorterRightR        POST
 |]
 instance Yesod PlaylistSorter
+
+-- Forms
 instance RenderMessage PlaylistSorter FormMessage where
     renderMessage _ _ = defaultFormMessage
 
@@ -73,28 +75,26 @@ postSorterSetupR = do
             yesod <- getYesod
             clientId     <- liftIO $ getEnv "CLIENT_ID"
             clientSecret <- liftIO $ getEnv "CLIENT_SECRET"
-            accessTokenMaybe <- liftIO $ SP.authWithClientCredentials clientId clientSecret
-            case accessTokenMaybe of
-                Just accessToken -> do
-                    let playlistId = encodeUtf8 . parsePlaylistInput $ playlistUrl playlistSortParams
-                    playlistNameMaybe <- liftIO $ SP.getPlaylistName accessToken playlistId
-                    case playlistNameMaybe of
-                        Just playlistName -> do
-                            tracks <- liftIO $ (=<<) shuffle (map Types.playlistItemTrack
-                                <$> SP.getPlaylistItems accessToken playlistId)
-                            let mergeSort' = initialMergeSortState tracks :: MergeSortState Types.Track
-                            _ <- liftIO $ atomicModifyIORef (currPlaylist yesod) ((playlistId, playlistName),)
-                            _ <- liftIO $ atomicModifyIORef (matchNumber  yesod) (1,)
-                            _ <- liftIO $ atomicModifyIORef (mergeSort    yesod) (mergeSort',)
-                            _ <- liftIO $ atomicModifyIORef (judgements   yesod) ([],)
-                            redirect SorterR
-                        _ -> redirect SorterR
-                _ -> redirect SorterR
+
+            let playlistId = encodeUtf8 . parsePlaylistInput $ playlistUrl playlistSortParams
+            token  <- liftIO $ SP.authWithClientCredentials clientId clientSecret
+            name   <- liftIO $ maybe (return Nothing) (`SP.getPlaylistName`  playlistId) token
+            tracks <- liftIO $ maybe (return [])      (`SP.getPlaylistItems` playlistId) token
+                >>= shuffle . map Types.playlistItemTrack
+
+            case name of
+                Just playlistName -> do
+                    liftIO $ atomicWriteIORef (currPlaylist yesod) (playlistId, playlistName)
+                          >> atomicWriteIORef (matchNumber  yesod) 1
+                          >> atomicWriteIORef (mergeSort    yesod) (initialMergeSortState tracks)
+                          >> atomicWriteIORef (judgements   yesod) []
+                    redirect SorterR
+                Nothing -> redirect SorterR
         _ -> redirect SorterR
 
 -- state mutators
-incCount :: (Num a, Show a) => IORef a -> IO a
-incCount counter = atomicModifyIORef counter (\c -> (c+1, c))
+updateCount :: (Num a, Show a) => IORef a -> IO a
+updateCount counter = atomicModifyIORef counter (\c -> (c+1, c))
 
 updateHistory :: Maybe (Types.Track, Types.Track) -> Ordering -> IORef [(Types.Track, Types.Track)] -> IO [(Types.Track, Types.Track)]
 updateHistory Nothing _ history = atomicModifyIORef history (\h -> (h, h))
@@ -102,37 +102,38 @@ updateHistory (Just (greater, lesser)) GT history = atomicModifyIORef history (\
 updateHistory (Just (lesser, greater)) LT history = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
 updateHistory _ EQ _ = error "Match tie feature is not implemented"
 
-resourceGenerator :: Ordering -> Handler Html
-resourceGenerator ord = defaultLayout $ do
+sorterJudgementResource :: Ordering -> Handler Html
+sorterJudgementResource ord = defaultLayout $ do
     yesod <- getYesod
     mergeSort' <- liftIO $ readIORef $ mergeSort yesod
-    _ <- liftIO $ updateHistory (currentMergeSortComparison mergeSort') ord $ judgements yesod
-    _ <- liftIO $ atomicModifyIORef (mergeSort yesod) (stepMergeSort mergeSort' ord,)
-    _ <- liftIO $ incCount $ matchNumber yesod
+    _ <- liftIO $ updateHistory    (currentMergeSortComparison mergeSort') ord (judgements yesod)
+               >> atomicWriteIORef (mergeSort yesod) (stepMergeSort mergeSort' ord)
+               >> updateCount      (matchNumber yesod)
     redirect SorterR
 
 -- resources
 postSorterLeftR :: Handler Html
-postSorterLeftR = resourceGenerator GT
+postSorterLeftR = sorterJudgementResource GT
 
 postSorterRightR :: Handler Html
-postSorterRightR = resourceGenerator LT
+postSorterRightR = sorterJudgementResource LT
 
-postSorterReshuffleR :: Handler Html
-postSorterReshuffleR = defaultLayout $ do
+getSorterReshuffleR :: Handler Html
+getSorterReshuffleR = defaultLayout $ do
     yesod <- getYesod
     clientId     <- liftIO $ getEnv "CLIENT_ID"
     clientSecret <- liftIO $ getEnv "CLIENT_SECRET"
-    accessTokenMaybe <- liftIO $ SP.authWithClientCredentials clientId clientSecret
+    token  <- liftIO $ SP.authWithClientCredentials clientId clientSecret
+
     (playlistId, _) <- liftIO $ readIORef $ currPlaylist yesod
-    case accessTokenMaybe of
-        Just accessToken -> do
-            tracks <- liftIO $ (=<<) shuffle (map Types.playlistItemTrack
-                <$> SP.getPlaylistItems accessToken playlistId)
-            let mergeSort' = initialMergeSortState tracks :: MergeSortState Types.Track
-            _ <- liftIO $ atomicModifyIORef (matchNumber  yesod) (1,)
-            _ <- liftIO $ atomicModifyIORef (mergeSort    yesod) (mergeSort',)
-            _ <- liftIO $ atomicModifyIORef (judgements   yesod) ([],)
+    tracks <- liftIO $ maybe (return [])      (`SP.getPlaylistItems` playlistId) token
+        >>= shuffle . map Types.playlistItemTrack
+
+    case token of
+        Just _ -> do
+            liftIO $ atomicWriteIORef (matchNumber  yesod) 1
+                  >> atomicWriteIORef (mergeSort    yesod) (initialMergeSortState tracks)
+                  >> atomicWriteIORef (judgements   yesod) []
             redirect SorterR
         _ -> redirect SorterR
 
@@ -144,18 +145,26 @@ getSorterResultR = defaultLayout $ do
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
-    let firstWidget = toWidget [whamlet|
-        <h1>Playlist Sorter
-        <div>
-            <p>You sorted the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
-            <form class="inline-block", action="@{SorterReshuffleR}", method="POST"> 
-                <input class="btn-link inline-block" type="submit" value="Restart?">
-            <a class="btn-link", href="@{SorterSetupR}">Change Playlist?</a>
-        <p>These are the results of the sort:
-    |]
     case mergeSort' of
-        MergeSortComplete sorted -> foldl (>>) firstWidget $ zipWith rankedTrackWidget [1..] sorted
-        MergeSortIncomplete _ -> toWidget [whamlet| <p>Sort incomplete! |]
+        MergeSortComplete sorted -> foldl (>>) [whamlet|
+            <h1>Playlist Sorter
+            <div>
+                <p>You sorted the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
+                    <form class="inline-block", action="@{SorterReshuffleR}", method="GET"> 
+                        <input class="btn-link inline-block" type="submit" value="Restart">
+                    <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
+            <p>These are the results of the sort:
+            |] $ zipWith rankedTrackWidget (map (T.pack . show) [1..]) sorted
+        state@(MergeSortIncomplete _) ->
+            let ordering = currentOrderingRanks state
+            in foldl (>>) [whamlet|
+                <h1>Playlist Sorter
+                <div>
+                    <p>You are sorting the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
+                        <a class="btn-link", href="@{SorterR}">Go back</a>
+                        <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
+                <p>These are the tentative results of the sort:
+                |] $ concatMap (\(i, x:xs) -> rankedTrackWidget (T.pack $ show i) x : map (rankedTrackWidget "--") xs) ordering
 
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
@@ -173,9 +182,9 @@ getSorterR = defaultLayout $ do
         <h1>Playlist Sorter
         <div>
             <p class="inline-block">You are sorting the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
-            <form class="inline-block", action="@{SorterReshuffleR}", method="POST"> 
-                <input class="btn-link inline-block" type="submit" value="Restart?">
-            <a class="btn-link", href="@{SorterSetupR}">Sort Different Playlist?</a>
+            <form class="inline-block", action="@{SorterReshuffleR}", method="GET"> 
+                <input class="btn-link inline-block" type="submit" value="Restart">
+            <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
         <p>Match #{matchNumber'}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
         <br>
     |] :: WidgetFor PlaylistSorter ()
@@ -264,10 +273,10 @@ bodyStyleWidget = toWidget
             width: 100%
     |]
 
-rankedTrackWidget :: Integer -> Types.Track -> WidgetFor PlaylistSorter ()
+rankedTrackWidget :: T.Text -> Types.Track -> WidgetFor PlaylistSorter ()
 rankedTrackWidget rank track = do
     toWidget [whamlet|
-        <p>#{rank}: #{Types.trackName track}
+        <p>#{rank} | #{Types.trackName track}
     |]
 
 trackAuthorWidget :: Types.Track -> WidgetFor PlaylistSorter ()

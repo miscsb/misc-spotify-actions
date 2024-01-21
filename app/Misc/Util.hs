@@ -4,6 +4,7 @@ module Misc.Util where
 import qualified System.Random
 import Data.Array.IO hiding (newArray)
 import Control.Monad
+import Data.List (transpose)
 
 -- https://wiki.haskell.org/Random_shuffle
 shuffle :: [a] -> IO [a]
@@ -70,5 +71,51 @@ currentMergeSortComparison :: MergeSortState a -> Maybe (a, a)
 currentMergeSortComparison (MergeSortComplete _) = Nothing
 currentMergeSortComparison (MergeSortIncomplete (_, _, merge)) = currentMergeComparison merge
 
+currentOrdering :: MergeSortState a -> [[a]]
+currentOrdering (MergeSortComplete sorted) = [[x] | x <- sorted]
+currentOrdering (MergeSortIncomplete (runsPrev, runsNext, MergeIncomplete (currLeft, currRight, currRun))) =
+        -- within (runsPrev ++ runsNext ++ [currRun]), group elements by how many other elements are better
+    let groupedFromZero = transpose (runsPrev ++ runsNext ++ [currRun])
+        -- same thing as above, but for remaining elements in current merge
+        groupedFromCurr = replicate (length currRun) [] ++ transpose [currLeft, currRight]
+        -- combine groupedFromZero and groupedFromCurr
+        combine :: [[a]] -> [[a]] -> [[a]]
+        combine xs [] = xs
+        combine [] ys = ys
+        combine (x:xs) (y:ys) = (x ++ y) : combine xs ys
+    in combine groupedFromZero groupedFromCurr
+currentOrdering (MergeSortIncomplete (runsPrev, runsNext, MergeComplete currRun))
+    = transpose (runsPrev ++ runsNext ++ [currRun])
+
+currentOrderingRanks :: MergeSortState a -> [(Int, [a])]
+currentOrderingRanks mergeSort =
+    let groups = currentOrdering mergeSort
+        ranks = scanl (+) 0 (map length groups)
+    in zipWith (\i xs -> (ranks !! i, xs)) [0..] groups
+
+-- estimate remaining comparisons
+estimateComparisonsLeftMerge :: MergeState a -> Int
+estimateComparisonsLeftMerge (MergeComplete _) = 0
+estimateComparisonsLeftMerge (MergeIncomplete (runL, runR, _)) = 2 * min (length runL) (length runR)
+
+estimateComparisonsLeftLayer :: Int -> Int -> Int
+estimateComparisonsLeftLayer blockSize listLength
+    | listLength < blockSize   = 0
+    | listLength < blockSize*2 = (listLength - blockSize)*2
+    | otherwise = (blockSize*2) + estimateComparisonsLeftLayer blockSize (listLength - blockSize*2)
+
+recoverLengthBlockSize :: [[a]] -> [[a]] -> MergeState a -> (Int, Int)
+recoverLengthBlockSize runsPrev runsNext (MergeIncomplete (mergeL, mergeR, mergeT)) =
+    let blockSize = length mergeL + length mergeR + length mergeT
+        len = blockSize + sum (map length (runsPrev ++ runsNext))
+    in (len, blockSize)
+
+estimateFutureLayers :: (Int, Int) -> Int
+estimateFutureLayers (length, blockSize)
+    | blockSize > length = 0
+    | otherwise          = estimateFutureLayers (length, blockSize * 2) + estimateComparisonsLeftLayer blockSize length
+
 estimateComparisonsLeft :: MergeSortState a -> Int
-estimateComparisonsLeft _ = 1 -- TODO add functionality
+estimateComparisonsLeft (MergeSortComplete _) = 0
+estimateComparisonsLeft (MergeSortIncomplete (runsPrev, runsNext, merge))
+    = estimateFutureLayers (recoverLengthBlockSize runsPrev runsNext merge) + sum (map length runsNext) + estimateComparisonsLeftMerge merge

@@ -1,0 +1,82 @@
+cabal-version:      3.0
+name:               playlist-sorter
+version:            0.1.0.0
+-- synopsis:
+-- description:
+license:            BSD-2-Clause
+license-file:       LICENSE
+author:             Samuel Buena
+maintainer:         sbuena@cs.stonybrook.edu
+-- copyright:
+category:           Web
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md,
+                    images/*
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+library misc-spotify-actions-lib
+    exposed-modules: Misc.Spotify
+                     Misc.Types
+                     Misc.Util
+    hs-source-dirs: lib
+    build-depends:  base ^>=4.17.2.0,
+                    -- string types, http, json
+                    text ^>= 2.1,
+                    bytestring ^>= 0.11.5.2,
+                    aeson ^>= 2.2.1.0,
+                    http-conduit ^>= 2.3.8.3,
+                    http-client ^>= 0.7.16,
+                    -- utility packages
+                    process ^>= 1.6.17.0,
+                    array,
+                    random,
+                    containers,
+                    split,
+                    casing ^>= 0.1.4.1,
+    default-language: Haskell2010
+
+executable playlist-sorter
+    import:           warnings
+    main-is:          Main.hs
+    build-depends:    misc-spotify-actions-lib,
+                      base ^>=4.17.2.0,
+                   -- testing
+                      test-framework,
+                      test-framework-hunit,
+                      HUnit,
+                   -- string types, http, json
+                      text ^>= 2.1,
+                      bytestring ^>= 0.11.5.2,
+                      blaze-markup,
+                      shakespeare,
+                      yesod,
+                      yesod-form,
+                   -- multithreading/processing
+                      process ^>= 1.6.17.0,
+                      dotenv ^>= 0.11.0.2,
+                      open-browser ^>= 0.2.1.0,
+                   -- utility packages
+                      array,
+                      random,
+                      containers,
+                      split,
+                      casing ^>= 0.1.4.1,
+                   -- regex
+                      regex-base,
+                      regex-pcre
+    hs-source-dirs:   app
+    default-language: Haskell2010
+
+test-suite tests
+   type:             exitcode-stdio-1.0
+   main-is:          TestSort.hs
+   hs-source-dirs:   tests
+   build-depends:    base >=4.6,
+                     test-framework,
+                     test-framework-hunit,
+                     HUnit,
+                     containers,
+                     misc-spotify-actions-lib

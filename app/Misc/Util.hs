@@ -90,7 +90,7 @@ currentOrdering (MergeSortIncomplete (runsPrev, runsNext, MergeComplete currRun)
 currentOrderingRanks :: MergeSortState a -> [(Int, [a])]
 currentOrderingRanks mergeSort =
     let groups = currentOrdering mergeSort
-        ranks = scanl (+) 0 (map length groups)
+        ranks = scanl (+) 1 (map length groups)
     in zipWith (\i xs -> (ranks !! i, xs)) [0..] groups
 
 -- estimate remaining comparisons

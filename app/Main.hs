@@ -20,8 +20,11 @@ import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
+import Text.Regex.PCRE((=~))
 import Web.Browser
 import Control.Concurrent
+import GHC.IO (catchAny)
+import Control.Exception (Exception)
 
 data PlaylistSorter = PlaylistSorter {
         matchNumber  :: IORef Integer
@@ -44,12 +47,16 @@ instance RenderMessage PlaylistSorter FormMessage where
     renderMessage _ _ = defaultFormMessage
 
 data PlaylistSortParams = PlaylistSortParams {
-        playlistUrl :: T.Text
+        playlistUrl :: T.Text,
+        artistRegex :: T.Text,
+        nameRegex   :: T.Text
     } deriving Show
 
 playlistSortParamsForm :: Html -> MForm Handler (FormResult PlaylistSortParams, Widget)
 playlistSortParamsForm = renderDivs $ PlaylistSortParams
-    <$> areq textField "Playlist URL (must be public)" Nothing
+    <$> areq textField "Playlist URL (must be public) " Nothing
+    <*> areq textField "Artist's name should match " (Just ".*")
+    <*> areq textField "Song name should match " (Just ".*")
 
 -- The GET handler displays the form
 getSorterSetupR :: Handler Html
@@ -79,14 +86,38 @@ postSorterSetupR = do
             let playlistId = encodeUtf8 . parsePlaylistInput $ playlistUrl playlistSortParams
             token  <- liftIO $ SP.authWithClientCredentials clientId clientSecret
             name   <- liftIO $ maybe (return Nothing) (`SP.getPlaylistName`  playlistId) token
-            tracks <- liftIO $ maybe (return [])      (`SP.getPlaylistItems` playlistId) token
+            tracks <- liftIO $ maybe (return [])      (`SP.getPlaylistItems` playlistId) (name >> token) -- fail if name failed
                 >>= shuffle . map Types.playlistItemTrack
+            
+            case name of
+                Just _ ->  return ()
+                Nothing -> redirect SorterSetupR
+
+            -- verify regex...
+            let handler :: Exception e => e -> IO (Maybe String)
+                handler _ = return Nothing
+            let tryRegex :: String -> IO (Maybe String)
+                tryRegex regex = catchAny (do
+                    let test = "" :: String
+                    let _ = (test =~ regex) :: Bool
+                    return (Just regex)) handler
+            let matchEnds :: String -> String
+                matchEnds regex = "^" <> regex <> "$"
+
+            artistRegex' <- liftIO (matchEnds . fromMaybe ".*" <$> tryRegex (T.unpack $ artistRegex playlistSortParams))
+            nameRegex'   <- liftIO (matchEnds . fromMaybe ".*" <$> tryRegex (T.unpack $ nameRegex   playlistSortParams))
+
+            let tracks' = filter
+                    (\track ->
+                        any (\artist -> T.unpack (Types.artistName artist) =~ artistRegex') (Types.trackArtists track)
+                     && T.unpack (Types.trackName track) =~ nameRegex'
+                    ) tracks
 
             case name of
                 Just playlistName -> do
                     liftIO $ atomicWriteIORef (currPlaylist yesod) (playlistId, playlistName)
                           >> atomicWriteIORef (matchNumber  yesod) 1
-                          >> atomicWriteIORef (mergeSort    yesod) (initialMergeSortState tracks)
+                          >> atomicWriteIORef (mergeSort    yesod) (initialMergeSortState tracks')
                           >> atomicWriteIORef (judgements   yesod) []
                     redirect SorterR
                 Nothing -> redirect SorterR
@@ -154,7 +185,7 @@ getSorterResultR = defaultLayout $ do
                         <input class="btn-link inline-block" type="submit" value="Restart">
                     <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
             <p>These are the results of the sort:
-            |] $ zipWith rankedTrackWidget (map (T.pack . show) [1..]) sorted
+            |] $ zipWith rankedTrackWidget (map (T.pack . show) ([1..] :: [Integer])) sorted
         state@(MergeSortIncomplete _) ->
             let ordering = currentOrderingRanks state
             in foldl (>>) [whamlet|
@@ -174,7 +205,7 @@ getSorterR = defaultLayout $ do
     (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
 
     let remainingMatches = estimateComparisonsLeft mergeSort'
-    let percentComplete = div (100 * matchNumber') (fromIntegral remainingMatches + matchNumber')
+    let percentComplete = div (100 * (matchNumber' - 1)) (fromIntegral remainingMatches + (matchNumber' - 1))
 
     setTitle "Playlist Sorter"
     bodyStyleWidget

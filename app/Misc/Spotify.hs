@@ -99,9 +99,11 @@ getPlaylistName token playlistId = do
     let request = setRequestQueryString [("fields", Just "name")]
           $ setRequestPath ("/v1/playlists/" <> playlistId)
           $ spotifyDefaultRequest token "GET"
-    response <- getResponseBody <$> httpJSON request
-    return $ case KM.lookup "name" response of
-        Just (String name) -> Just name
+    response <- httpLBS request
+    return $ case getResponseStatusCode response of
+        200 -> case decode (getResponseBody response) >>= KM.lookup "name" of
+            Just (String name) -> Just name
+            _ -> Nothing
         _ -> Nothing
 
 -- playlist mutators

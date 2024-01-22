@@ -41,6 +41,8 @@ executable misc-spotify-actions
                       blaze-markup,
                       split,
                       shakespeare,
-                      open-browser ^>= 0.2.1.0
+                      open-browser ^>= 0.2.1.0,
+                      regex-base,
+                      regex-pcre
     hs-source-dirs:   app
     default-language: Haskell2010

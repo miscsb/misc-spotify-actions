@@ -6,18 +6,20 @@ import Test.Framework.Providers.HUnit
 import Data.Monoid
 import Control.Monad
 import Misc.Util
+import Control.Monad.Trans.State (runState)
 
 interactiveSort :: [Int] -> [Int]
 interactiveSort xs =
-    let mergeSort = initialMergeSortState xs
-        comparator (Just (valueLeft, valueRight)) = compare valueLeft valueRight
-        comparator Nothing = error "impossible"
-        mergeSort' = until (\state -> case state of 
-            MergeSortComplete _ -> True
-            MergeSortIncomplete _ -> False) (\state -> stepMergeSort state (comparator (currentMergeSortComparison state))) mergeSort
-    in case mergeSort' of
-        MergeSortComplete sorted -> sorted
-        MergeSortIncomplete _ -> error "impossible"
+    let state0 = initialMergeSortState xs
+        comparator (Left (valueLeft, valueRight)) = compare valueLeft valueRight
+        comparator (Right _) = error "impossible"
+        state' = until (\(a, s) -> case a of 
+            Left _ -> False
+            Right _ -> True) 
+            (\(a, s) -> runState (comparisonToMergeSortState (comparator a)) s) state0
+    in case state' of
+        (_, MergeSortComplete sorted) -> sorted
+        (_, MergeSortIncomplete _) -> error "impossible"
 
 sortTest1 :: Assertion
 sortTest1 = assertEqual "should be sorted" [8,7..1] (interactiveSort [8,1,7,2,6,3,5,4])
@@ -33,8 +35,10 @@ sortTest4 = assertEqual "should be sorted" [1] (interactiveSort [1])
 
 main :: IO ()
 main = defaultMainWithOpts
-    [testCase "sort even list" sortTest1,
-     testCase "sort odd list" sortTest2,
-     testCase "sort empty list" sortTest3,
-     testCase "sort singleton list" sortTest4]
+    [
+        testCase "sort even list" sortTest1,
+        testCase "sort odd list" sortTest2,
+        testCase "sort empty list" sortTest3,
+        testCase "sort singleton list" sortTest4
+    ]
     mempty

@@ -36,6 +36,7 @@ library misc-spotify-actions-lib
                     containers,
                     split,
                     casing ^>= 0.1.4.1,
+                    transformers
     default-language: Haskell2010
 
 executable playlist-sorter
@@ -79,4 +80,5 @@ test-suite tests
                      test-framework-hunit,
                      HUnit,
                      containers,
+                     transformers,
                      misc-spotify-actions-lib

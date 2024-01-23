@@ -29,7 +29,7 @@ import Control.Exception (Exception)
 data PlaylistSorter = PlaylistSorter {
         matchNumber  :: IORef Integer
     ,   currPlaylist :: IORef (Types.PlaylistId, T.Text)
-    ,   mergeSort    :: IORef (MergeSortState Types.Track)
+    ,   mergeSort    :: IORef (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track)
     ,   judgements   :: IORef [(Types.Track, Types.Track)]
 }
 mkYesod "PlaylistSorter" [parseRoutes|
@@ -127,18 +127,18 @@ postSorterSetupR = do
 updateCount :: (Num a, Show a) => IORef a -> IO a
 updateCount counter = atomicModifyIORef counter (\c -> (c+1, c))
 
-updateHistory :: Maybe (Types.Track, Types.Track) -> Ordering -> IORef [(Types.Track, Types.Track)] -> IO [(Types.Track, Types.Track)]
-updateHistory Nothing _ history = atomicModifyIORef history (\h -> (h, h))
-updateHistory (Just (greater, lesser)) GT history = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
-updateHistory (Just (lesser, greater)) LT history = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
-updateHistory _ EQ _ = error "Match tie feature is not implemented"
+updateHistory :: IORef [(Types.Track, Types.Track)] -> Either (Types.Track, Types.Track) [Types.Track] -> Ordering -> IO [(Types.Track, Types.Track)]
+updateHistory history (Right _) _ = atomicModifyIORef history (\h -> (h, h))
+updateHistory history (Left (greater, lesser)) GT = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
+updateHistory history (Left (lesser, greater)) LT = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
+updateHistory _ _ EQ = error "Match tie feature is not implemented"
 
 sorterJudgementResource :: Ordering -> Handler Html
 sorterJudgementResource ord = defaultLayout $ do
     yesod <- getYesod
-    mergeSort' <- liftIO $ readIORef $ mergeSort yesod
-    _ <- liftIO $ updateHistory    (currentMergeSortComparison mergeSort') ord (judgements yesod)
-               >> atomicWriteIORef (mergeSort yesod) (stepMergeSort mergeSort' ord)
+    (nextComparison, mergeSort') <- liftIO $ readIORef $ mergeSort yesod
+    _ <- liftIO $ updateHistory    (judgements  yesod) nextComparison ord
+               >> atomicWriteIORef (mergeSort   yesod) (stepMergeSort mergeSort' ord)
                >> updateCount      (matchNumber yesod)
     redirect SorterR
 
@@ -171,7 +171,7 @@ getSorterReshuffleR = defaultLayout $ do
 getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
     yesod <- getYesod
-    mergeSort' <- liftIO $ readIORef $ mergeSort yesod
+    (_, mergeSort') <- liftIO $ readIORef $ mergeSort yesod
     (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
 
     setTitle "Playlist Sorter"
@@ -200,7 +200,7 @@ getSorterResultR = defaultLayout $ do
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
     yesod <- getYesod
-    mergeSort'   <- liftIO $ readIORef $ mergeSort   yesod
+    (nextComparison, mergeSort')   <- liftIO $ readIORef $ mergeSort   yesod
     matchNumber' <- liftIO $ readIORef $ matchNumber yesod
     (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
 
@@ -219,9 +219,9 @@ getSorterR = defaultLayout $ do
         <p>Match #{matchNumber'}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
         <br>
     |] :: WidgetFor PlaylistSorter ()
-    let leftPageBottom = case currentMergeSortComparison mergeSort' of
-          Nothing -> redirect SorterResultR
-          Just comparison -> trackComparisonWidget comparison
+    let leftPageBottom = case nextComparison of
+          Right _ -> redirect SorterResultR
+          Left comparison -> trackComparisonWidget comparison
 
     toWidget [whamlet|
         <div style="width: 65%; float:left;">
@@ -404,7 +404,7 @@ main = do
     putStrLn "Loading playlist"
     tracks <- (=<<) shuffle (map Types.playlistItemTrack
         <$> SP.getPlaylistItems accessToken (encodeUtf8 $ T.pack sourcePlaylist))
-    let mergeSort' = initialMergeSortState tracks :: MergeSortState Types.Track
+    let mergeSort' = initialMergeSortState tracks
 
 
     -- initiate vars

@@ -7,14 +7,13 @@
 {-# OPTIONS_GHC -Wno-deferred-out-of-scope-variables #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 import Yesod hiding (count)
-import Data.Serialize (encode, decode, Serialize)
 import qualified Web.ClientSession as CS
 import Configuration.Dotenv (loadFile, defaultConfig)
-import Data.IORef ( IORef, atomicModifyIORef, atomicWriteIORef, newIORef, readIORef )
 import qualified Misc.Types as Types
 import qualified Misc.Spotify as SP
-import Misc.SortSerialize
+import Misc.Sort
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8, decodeLatin1)
 import qualified Data.Text as T
@@ -23,17 +22,13 @@ import qualified Data.List as List
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
 import Text.Regex.PCRE((=~))
+import Text.Read
 import Web.Browser
 import Control.Concurrent
 import GHC.IO (catchAny)
 import Control.Exception (Exception)
 
-data PlaylistSorter = PlaylistSorter {
-        matchNumber  :: IORef Integer
-    ,   currPlaylist :: IORef (Types.PlaylistId, T.Text)
-    ,   mergeSort    :: IORef (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track)
-    ,   judgements   :: IORef [(Types.Track, Types.Track)]
-}
+data PlaylistSorter = PlaylistSorter
 mkYesod "PlaylistSorter" [parseRoutes|
     /sorter             SorterR             GET
     /sorter/result      SorterResultR       GET
@@ -68,6 +63,9 @@ getSorterSetupR :: Handler Html
 getSorterSetupR = do
     (widget, enctype) <- generateFormPost playlistSortParamsForm
     defaultLayout $ do
+        y <- getSession
+        liftIO $ print y
+        
         setTitle "Playlist Sorter"
         bodyStyleWidget
         [whamlet|
@@ -84,7 +82,6 @@ postSorterSetupR = do
     ((result, _), _) <- runFormPost playlistSortParamsForm
     case result of
         FormSuccess playlistSortParams -> do
-            yesod <- getYesod
             clientId     <- liftIO $ getEnv "CLIENT_ID"
             clientSecret <- liftIO $ getEnv "CLIENT_SECRET"
 
@@ -93,7 +90,7 @@ postSorterSetupR = do
             name   <- liftIO $ maybe (return Nothing) (`SP.getPlaylistName`  playlistId) token
             tracks <- liftIO $ maybe (return [])      (`SP.getPlaylistItems` playlistId) (name >> token) -- fail if name failed
                 >>= shuffle . map Types.playlistItemTrack
-            
+
             case name of
                 Just _ ->  return ()
                 Nothing -> redirect SorterSetupR
@@ -117,34 +114,47 @@ postSorterSetupR = do
                         any (\artist -> T.unpack (Types.artistName artist) =~ artistRegex') (Types.trackArtists track)
                      && T.unpack (Types.trackName track) =~ nameRegex'
                     ) tracks
+            
+            y <- getSession
+            liftIO $ print y
 
             case name of
                 Just playlistName -> do
-                    liftIO $ atomicWriteIORef (currPlaylist yesod) (playlistId, playlistName)
-                          >> atomicWriteIORef (matchNumber  yesod) 1
-                          >> atomicWriteIORef (mergeSort    yesod) (initialMergeSortState tracks')
-                          >> atomicWriteIORef (judgements   yesod) []
-                    redirect SorterR
-                Nothing -> redirect SorterR
+                    showAndSetSession "currPlaylist" (playlistId, playlistName)
+                    showAndSetSession "matchNumber"  1
+                    showAndSetSession "mergeSort"    (initialMergeSortState tracks')
+                    showAndSetSession "judgements"   ([] :: [(Types.Track, Types.Track)])
+                Nothing -> return ()
+
+            y <- getSession
+            liftIO $ print y
+
+            redirect SorterR
         _ -> redirect SorterR
 
--- state mutators
-updateCount :: (Num a, Show a) => IORef a -> IO a
-updateCount counter = atomicModifyIORef counter (\c -> (c+1, c))
-
-updateHistory :: IORef [(Types.Track, Types.Track)] -> Either (Types.Track, Types.Track) [Types.Track] -> Ordering -> IO [(Types.Track, Types.Track)]
-updateHistory history (Right _) _ = atomicModifyIORef history (\h -> (h, h))
-updateHistory history (Left (greater, lesser)) GT = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
-updateHistory history (Left (lesser, greater)) LT = atomicModifyIORef history (\h -> ((greater, lesser):h, h))
+-- util
+updateHistory :: [(Types.Track, Types.Track)] -> Either (Types.Track, Types.Track) [Types.Track] -> Ordering -> [(Types.Track, Types.Track)]
+updateHistory history (Right _) _ = history
+updateHistory history (Left (greater, lesser)) GT = (greater, lesser):history
+updateHistory history (Left (lesser, greater)) LT = (greater, lesser):history
 updateHistory _ _ EQ = error "Match tie feature is not implemented"
 
 sorterJudgementResource :: Ordering -> Handler Html
 sorterJudgementResource ord = defaultLayout $ do
-    yesod <- getYesod
-    (nextComparison, mergeSort') <- liftIO $ readIORef $ mergeSort yesod
-    _ <- liftIO $ updateHistory    (judgements  yesod) nextComparison ord
-               >> atomicWriteIORef (mergeSort   yesod) (stepMergeSort mergeSort' ord)
-               >> updateCount      (matchNumber yesod)
+    maybeMatchNumber :: Maybe Int
+        <- readAndLookupSession "matchNumber"
+    maybeMergeState :: Maybe (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track) 
+        <- readAndLookupSession "mergeSort"
+    maybeJudgements :: Maybe [(Types.Track, Types.Track)]
+        <- readAndLookupSession "judgements"
+    
+    case maybeMergeState of
+        Just (nextComparison, sortState) -> do
+            showAndSetSession "mergeSort"   (stepMergeSort sortState ord)
+            showAndSetSession "matchNumber" (1 + fromMaybe 0 maybeMatchNumber)
+            showAndSetSession "judgements"  (updateHistory (fromMaybe [] maybeJudgements) nextComparison ord)
+        _ -> return ()
+    
     redirect SorterR
 
 -- resources
@@ -156,33 +166,34 @@ postSorterRightR = sorterJudgementResource LT
 
 getSorterReshuffleR :: Handler Html
 getSorterReshuffleR = defaultLayout $ do
-    yesod <- getYesod
     clientId     <- liftIO $ getEnv "CLIENT_ID"
     clientSecret <- liftIO $ getEnv "CLIENT_SECRET"
-    token  <- liftIO $ SP.authWithClientCredentials clientId clientSecret
 
-    (playlistId, _) <- liftIO $ readIORef $ currPlaylist yesod
-    tracks <- liftIO $ maybe (return [])      (`SP.getPlaylistItems` playlistId) token
-        >>= shuffle . map Types.playlistItemTrack
+    maybeToken   <- liftIO $ SP.authWithClientCredentials clientId clientSecret
+    maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
+        <- readAndLookupSession "currPlaylist"
 
-    case token of
-        Just _ -> do
-            liftIO $ atomicWriteIORef (matchNumber  yesod) 1
-                  >> atomicWriteIORef (mergeSort    yesod) (initialMergeSortState tracks)
-                  >> atomicWriteIORef (judgements   yesod) []
-            redirect SorterR
-        _ -> redirect SorterR
+    case (maybeCurrPlaylist, maybeToken) of
+        (Just (playlistId, _), Just token) -> do
+            tracks <- liftIO $ (`SP.getPlaylistItems` playlistId) token
+                >>= shuffle . map Types.playlistItemTrack
+            showAndSetSession "matchNumber" 1
+            showAndSetSession "judgements"  ([] :: [(Types.Track, Types.Track)])
+            showAndSetSession "mergeSort"   (initialMergeSortState tracks)
+        _ -> return ()
+    redirect SorterR
 
 getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
-    yesod <- getYesod
-    (_, mergeSort') <- liftIO $ readIORef $ mergeSort yesod
-    (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
+    maybeMergeState :: Maybe (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track) 
+        <- readAndLookupSession "mergeSort"
+    maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
+        <- readAndLookupSession "currPlaylist"
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
-    case mergeSort' of
-        MergeSortComplete sorted -> foldl (>>) [whamlet|
+    case (maybeMergeState, maybeCurrPlaylist) of
+        (Just (_, MergeSortComplete sorted), Just (playlistId, playlistName)) -> foldl (>>) [whamlet|
             <h1>Playlist Sorter
             <div>
                 <p>You sorted the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
@@ -191,7 +202,7 @@ getSorterResultR = defaultLayout $ do
                     <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
             <p>These are the results of the sort:
             |] $ zipWith rankedTrackWidget (map (T.pack . show) ([1..] :: [Integer])) sorted
-        state@(MergeSortIncomplete _) ->
+        (Just (_, state@(MergeSortIncomplete _)), Just (playlistId, playlistName)) ->
             let ordering = currentOrderingRanks state
             in foldl (>>) [whamlet|
                 <h1>Playlist Sorter
@@ -201,42 +212,54 @@ getSorterResultR = defaultLayout $ do
                         <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
                 <p>These are the tentative results of the sort:
                 |] $ concatMap (\(i, x:xs) -> rankedTrackWidget (T.pack $ show i) x : map (rankedTrackWidget "--") xs) ordering
+        _ -> redirect SorterSetupR
 
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
-    yesod <- getYesod
-    (nextComparison, mergeSort')   <- liftIO $ readIORef $ mergeSort   yesod
-    matchNumber' <- liftIO $ readIORef $ matchNumber yesod
-    (playlistId, playlistName) <- liftIO $ readIORef $ currPlaylist yesod
+    maybeMergeState :: Maybe (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track) 
+        <- readAndLookupSession "mergeSort"
+    maybeMatchNumber :: Maybe Int
+        <- readAndLookupSession "matchNumber"
+    maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
+        <- readAndLookupSession "currPlaylist"
+    
+    liftIO $ do
+        print (maybeMergeState) >> print (maybeMatchNumber) >> print (maybeCurrPlaylist)
 
-    let remainingMatches = estimateComparisonsLeft mergeSort'
-    let percentComplete = div (100 * (matchNumber' - 1)) (fromIntegral remainingMatches + (matchNumber' - 1))
+    y <- getSession
+    liftIO $ print y
 
-    setTitle "Playlist Sorter"
-    bodyStyleWidget
-    let leftPageTop = toWidget [whamlet|
-        <h1>Playlist Sorter
-        <div>
-            <p class="inline-block">You are sorting the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
-            <form class="inline-block", action="@{SorterReshuffleR}", method="GET"> 
-                <input class="btn-link inline-block" type="submit" value="Restart">
-            <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
-        <p>Match #{matchNumber'}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
-        <br>
-    |] :: WidgetFor PlaylistSorter ()
-    let leftPageBottom = case nextComparison of
-          Right _ -> redirect SorterResultR
-          Left comparison -> trackComparisonWidget comparison
+    case (maybeMergeState, maybeMatchNumber, maybeCurrPlaylist) of
+        (Just (nextComparison, mergeSort'), Just matchNumber', Just (playlistId, playlistName)) -> do 
+            let remainingMatches = estimateComparisonsLeft mergeSort'
+            let percentComplete = div (100 * (matchNumber' - 1)) (fromIntegral remainingMatches + (matchNumber' - 1))
 
-    toWidget [whamlet|
-        <div style="width: 65%; float:left;">
-            ^{leftPageTop}
-            ^{leftPageBottom}
-        <div style="width: 35%; float:right;">
-            <h3>Win-loss records
-            <div style="height: 400px; overflow-y: scroll;">
-                ^{leaderboardWidget}
-    |]
+            setTitle "Playlist Sorter"
+            bodyStyleWidget
+            let leftPageTop = toWidget [whamlet|
+                <h1>Playlist Sorter
+                <div>
+                    <p class="inline-block">You are sorting the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
+                    <form class="inline-block", action="@{SorterReshuffleR}", method="GET"> 
+                        <input class="btn-link inline-block" type="submit" value="Restart">
+                    <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
+                <p>Match #{matchNumber'}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
+                <br>
+            |] :: WidgetFor PlaylistSorter ()
+            let leftPageBottom = case nextComparison of
+                    Right _ -> redirect SorterResultR
+                    Left comparison -> trackComparisonWidget comparison
+
+            toWidget [whamlet|
+                <div style="width: 65%; float:left;">
+                    ^{leftPageTop}
+                    ^{leftPageBottom}
+                <div style="width: 35%; float:right;">
+                    <h3>Win-loss records
+                    <div style="height: 400px; overflow-y: scroll;">
+                        ^{leaderboardWidget}
+            |]
+        _ -> redirect SorterSetupR
 
 -- widgets
 bodyStyleWidget :: WidgetFor PlaylistSorter ()
@@ -366,16 +389,16 @@ trackComparisonWidget (trackLeft, trackRight) = do
 
 judgementHistoryWidget :: WidgetFor PlaylistSorter ()
 judgementHistoryWidget = do
-    yesod <- getYesod
-    judgements' <- liftIO $ readIORef $ judgements yesod
+    x <- readAndLookupSession "judgements" -- :: Maybe [(Types.Track, Types.Track)]
+    let judgements' = fromMaybe [] x
     let judgementItemWidget (greater, lesser) = do
           toWidget [whamlet| <p>#{Types.trackName greater} > #{Types.trackName lesser} |]
     foldl (>>) [whamlet||] $ map judgementItemWidget judgements'
 
 leaderboardWidget :: WidgetFor PlaylistSorter ()
 leaderboardWidget = do
-    yesod <- getYesod
-    judgements' <- liftIO $ readIORef $ judgements yesod
+    x <- readAndLookupSession "judgements" -- :: Maybe [(Types.Track, Types.Track)]
+    let judgements' = fromMaybe [] x
     let combiner (trackLeftId, trackRightId) =
           Map.insertWith f trackLeftId  (1, 0) .
           Map.insertWith f trackRightId (0, 1)
@@ -394,43 +417,12 @@ leaderboardWidget = do
 
 main :: IO ()
 main = do
-    -- load environment variables
     loadFile defaultConfig
-    clientId       <- getEnv "CLIENT_ID"
-    clientSecret   <- getEnv "CLIENT_SECRET"
-    sourcePlaylist <- getEnv "SOURCE_PLAYLIST" -- default playlist
-
-    -- authorize
-    putStrLn "Authorizing"
-    accessTokenMaybe <- SP.authWithClientCredentials clientId clientSecret
-    let accessToken = fromMaybe (error "could not authenticate") accessTokenMaybe
-
-    -- load playlist
-    putStrLn "Loading playlist"
-    tracks <- (=<<) shuffle (map Types.playlistItemTrack
-        <$> SP.getPlaylistItems accessToken (encodeUtf8 $ T.pack sourcePlaylist))
-    let mergeSort' = initialMergeSortState tracks
-
-
-    -- initiate vars
-    putStrLn "Intiating variables"
-    currPlaylist' <- newIORef ((encodeUtf8 . T.pack) sourcePlaylist, "Today's Top Hits")
-    matchNumber'  <- newIORef 1
-    mergeSort''   <- newIORef mergeSort'
-    judgements'   <- newIORef []
-
     _ <- forkIO (do
         _ <- threadDelay 1000
         () <$ openBrowser "http://localhost:3000/sorter")
-
-    -- start site and (todo) open browser
     putStrLn "Starting site"
-    warp 3000 $ PlaylistSorter {
-        currPlaylist = currPlaylist',
-        matchNumber  = matchNumber',
-        mergeSort    = mergeSort'',
-        judgements   = judgements'
-    }
+    warp 3000 $ PlaylistSorter
 
 parsePlaylistInput :: T.Text -> T.Text
 parsePlaylistInput input =
@@ -440,13 +432,10 @@ parsePlaylistInput input =
     in str''
 
 -- serialization
-serializeAndSetSession :: (Serialize a, MonadHandler m) => T.Text -> a -> m ()
-serializeAndSetSession name value = setSessionBS name (encode value)
+showAndSetSession :: (MonadHandler m, Show a) => T.Text -> a -> m ()
+showAndSetSession name value = setSession name (T.pack $ show value)
 
-deserializeAndLookupSession :: (Serialize a, MonadHandler m) => T.Text -> m (Maybe a)
-deserializeAndLookupSession name = do 
-    stored <- lookupSessionBS name
-    let value' = case decode <$> stored of
-            Just (Right value) -> Just value
-            _ -> Nothing
-    return value'
+readAndLookupSession :: (MonadHandler m, Read a) => T.Text -> m (Maybe a)
+readAndLookupSession name = do
+    stored <- lookupSession name
+    return (stored >>= readMaybe . T.unpack)

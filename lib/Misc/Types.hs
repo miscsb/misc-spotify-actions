@@ -15,8 +15,6 @@ import Data.Aeson
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Text.Casing
-import Data.Serialize (Serialize)
-import Data.Serialize.Text
 
 -- Type aliases
 type AccessToken = BS.ByteString
@@ -55,52 +53,48 @@ data Track = Track {
         trackAlbum       :: Album
     ,   trackArtists     :: [Artist]
     ,   trackDiscNumber  :: Int
-    ,   trackDurationMs  :: Int
-    ,   trackExplicit    :: Bool
-    ,   trackHref        :: T.Text
+    -- ,   trackDurationMs  :: Int
+    -- ,   trackExplicit    :: Bool
+    -- ,   trackHref        :: T.Text
     ,   trackId          :: TrackId
     -- TODO add is_playable, linked_from, restrictions --
     ,   trackName        :: T.Text
-    ,   trackPopularity  :: Double
+    -- ,   trackPopularity  :: Double
     ,   trackPreviewUrl  :: Maybe T.Text
-    ,   trackTrackNumber :: Int
+    -- ,   trackTrackNumber :: Int
     ,   trackUri         :: T.Text
-    } deriving (Generic, Show, Ord, Eq)
+    } deriving (Generic, Show, Read, Ord, Eq)
 instance ToJSON Track
 instance FromJSON Track where
     parseJSON = genericParseJSON (customOptions "track")
-instance Serialize Track
 
 data Artist = Artist {
         artistName       :: T.Text
     ,   artistId         :: T.Text
     -- TODO add other fields --
-    } deriving (Generic, Show, Ord, Eq)
+    } deriving (Generic, Show, Read, Ord, Eq)
 instance ToJSON Artist
 instance FromJSON Artist where
     parseJSON = genericParseJSON (customOptions "artist")
-instance Serialize Artist
 
 data Album = Album {
         albumImages     :: [Image]
     ,   albumName       :: T.Text
     ,   albumId         :: T.Text
     -- TODO add other fields --
-    } deriving (Generic, Show, Ord, Eq)
+    } deriving (Generic, Show, Read, Ord, Eq)
 instance ToJSON Album
 instance FromJSON Album where
     parseJSON = genericParseJSON (customOptions "album")
-instance Serialize Album
 
 data Image = Image {
         imageUrl    :: T.Text
     ,   imageHeight :: Maybe Int
     ,   imageWidth  :: Maybe Int
-    } deriving (Generic, Show, Ord, Eq)
+    } deriving (Generic, Show, Read, Ord, Eq)
 instance ToJSON Image
 instance FromJSON Image where
     parseJSON = genericParseJSON (customOptions "image")
-instance Serialize Image
 
 -- Audio Analyses --
 data AudioFeatures = AudioFeaturesObject {

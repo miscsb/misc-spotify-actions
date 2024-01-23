@@ -21,7 +21,6 @@ library misc-spotify-actions-lib
     exposed-modules: Misc.Spotify
                      Misc.Types
                      Misc.Sort
-                     Misc.SortSerialize
     hs-source-dirs: lib
     build-depends:  base ^>=4.17.2.0,
                     -- string types, http, json
@@ -30,8 +29,6 @@ library misc-spotify-actions-lib
                     aeson ^>= 2.2.1.0,
                     http-conduit ^>= 2.3.8.3,
                     http-client ^>= 0.7.16,
-                    cereal,
-                    cereal-text,
                     -- utility packages
                     process ^>= 1.6.17.0,
                     array,
@@ -59,8 +56,6 @@ executable playlist-sorter
                       yesod,
                       yesod-form,
                       clientsession,
-                      cereal,
-                      cereal-text,
                    -- multithreading/processing
                       process ^>= 1.6.17.0,
                       dotenv ^>= 0.11.0.2,

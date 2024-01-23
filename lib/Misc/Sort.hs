@@ -23,7 +23,7 @@ shuffle xs = do
         newArray k = newListArray (1, k)
 
 data MergeState a = MergeComplete [a] | MergeIncomplete ([a], [a], [a])
-    deriving Show
+    deriving (Show, Read)
 
 comparisonToMergeState :: Ordering -> State (MergeState a) (Either (a, a) [a])
 comparisonToMergeState ord = state (\mergeState ->
@@ -46,7 +46,7 @@ stepMerge (MergeIncomplete (left, right, temp)) LT
     = stepMerge (MergeIncomplete (right, left, temp)) GT
 
 data MergeLayerState a = MergeLayerComplete [[a]] | MergeLayerIncomplete ([[a]], MergeState a, [[a]])
-    deriving Show
+    deriving (Show, Read)
 
 comparisonToMergeLayerState :: Ordering -> State (MergeLayerState a) (Either (a, a) [[a]])
 comparisonToMergeLayerState ord = state (`stepMergeLayer` ord)
@@ -67,7 +67,7 @@ stepMergeLayer (MergeLayerIncomplete (prev, mergeState@(MergeIncomplete _), next
 stepMergeLayer (MergeLayerIncomplete (_, MergeComplete _, _)) _ = error "Not allowed 1"
 
 data MergeSortState a = MergeSortComplete [a] | MergeSortIncomplete (MergeLayerState a)
-    deriving Show
+    deriving (Show, Read)
 
 comparisonToMergeSortState :: Ordering -> State (MergeSortState a) (Either (a, a) [a])
 comparisonToMergeSortState ord = state (`stepMergeSort` ord)

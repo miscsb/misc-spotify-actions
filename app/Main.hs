@@ -1,18 +1,20 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# OPTIONS_GHC -Wno-deferred-out-of-scope-variables #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 import Yesod hiding (count)
+import Data.Serialize (encode, decode, Serialize)
+import qualified Web.ClientSession as CS
 import Configuration.Dotenv (loadFile, defaultConfig)
 import Data.IORef ( IORef, atomicModifyIORef, atomicWriteIORef, newIORef, readIORef )
 import qualified Misc.Types as Types
 import qualified Misc.Spotify as SP
-import Misc.Sort
+import Misc.SortSerialize
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8, decodeLatin1)
 import qualified Data.Text as T
@@ -40,7 +42,10 @@ mkYesod "PlaylistSorter" [parseRoutes|
     /sorter/left        SorterLeftR         POST
     /sorter/right       SorterRightR        POST
 |]
-instance Yesod PlaylistSorter
+instance Yesod PlaylistSorter where
+    makeSessionBackend _ = sslOnlySessions $
+        fmap Just $ defaultClientSessionBackend 120 "mykey.aes"
+    yesodMiddleware = (sslOnlyMiddleware 120) . defaultYesodMiddleware
 
 -- Forms
 instance RenderMessage PlaylistSorter FormMessage where
@@ -433,3 +438,15 @@ parsePlaylistInput input =
         str'  = last (T.splitOn "playlist:" str)
         str'' = head (T.splitOn "?" str')
     in str''
+
+-- serialization
+serializeAndSetSession :: (Serialize a, MonadHandler m) => T.Text -> a -> m ()
+serializeAndSetSession name value = setSessionBS name (encode value)
+
+deserializeAndLookupSession :: (Serialize a, MonadHandler m) => T.Text -> m (Maybe a)
+deserializeAndLookupSession name = do 
+    stored <- lookupSessionBS name
+    let value' = case decode <$> stored of
+            Just (Right value) -> Just value
+            _ -> Nothing
+    return value'

@@ -15,6 +15,8 @@ import Data.Aeson
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Text.Casing
+import Data.Serialize (Serialize)
+import Data.Serialize.Text
 
 -- Type aliases
 type AccessToken = BS.ByteString
@@ -67,6 +69,7 @@ data Track = Track {
 instance ToJSON Track
 instance FromJSON Track where
     parseJSON = genericParseJSON (customOptions "track")
+instance Serialize Track
 
 data Artist = Artist {
         artistName       :: T.Text
@@ -76,6 +79,7 @@ data Artist = Artist {
 instance ToJSON Artist
 instance FromJSON Artist where
     parseJSON = genericParseJSON (customOptions "artist")
+instance Serialize Artist
 
 data Album = Album {
         albumImages     :: [Image]
@@ -86,6 +90,7 @@ data Album = Album {
 instance ToJSON Album
 instance FromJSON Album where
     parseJSON = genericParseJSON (customOptions "album")
+instance Serialize Album
 
 data Image = Image {
         imageUrl    :: T.Text
@@ -95,6 +100,7 @@ data Image = Image {
 instance ToJSON Image
 instance FromJSON Image where
     parseJSON = genericParseJSON (customOptions "image")
+instance Serialize Image
 
 -- Audio Analyses --
 data AudioFeatures = AudioFeaturesObject {

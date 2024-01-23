@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -Wno-unused-matches #-}
-module Misc.Util where
+module Misc.Sort where
 
 import qualified System.Random
 import Data.Array.IO hiding (newArray)

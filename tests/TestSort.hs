@@ -5,7 +5,7 @@ import Test.Framework
 import Test.Framework.Providers.HUnit
 import Data.Monoid
 import Control.Monad
-import Misc.Util
+import Misc.Sort
 import Control.Monad.Trans.State (runState)
 
 interactiveSort :: [Int] -> [Int]

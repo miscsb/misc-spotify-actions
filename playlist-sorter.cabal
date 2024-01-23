@@ -20,7 +20,7 @@ common warnings
 library misc-spotify-actions-lib
     exposed-modules: Misc.Spotify
                      Misc.Types
-                     Misc.Util
+                     Misc.Sort
     hs-source-dirs: lib
     build-depends:  base ^>=4.17.2.0,
                     -- string types, http, json
@@ -82,3 +82,4 @@ test-suite tests
                      containers,
                      transformers,
                      misc-spotify-actions-lib
+   default-language: Haskell2010

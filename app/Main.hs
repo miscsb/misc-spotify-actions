@@ -12,7 +12,7 @@ import Configuration.Dotenv (loadFile, defaultConfig)
 import Data.IORef ( IORef, atomicModifyIORef, atomicWriteIORef, newIORef, readIORef )
 import qualified Misc.Types as Types
 import qualified Misc.Spotify as SP
-import Misc.Util
+import Misc.Sort
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8, decodeLatin1)
 import qualified Data.Text as T

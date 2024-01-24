@@ -16,6 +16,7 @@ import qualified Misc.Spotify as SP
 import Misc.Sort
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8, decodeLatin1)
+import Data.CaseInsensitive (mk)
 import qualified Data.Text as T
 import qualified Data.ByteString as BS
 import qualified Data.Map as Map
@@ -47,6 +48,7 @@ instance Yesod PlaylistSorter where
     yesodMiddleware = sslOnlyMiddleware 120 . defaultYesodMiddleware
 
 -- State
+type TrackSortState = Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
 sortStateCookie    :: TypedCookie (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
 currPlaylistCookie :: TypedCookie (Types.PlaylistId, T.Text)
 matchNumberCookie  :: TypedCookie Int
@@ -139,7 +141,7 @@ postSorterSetupR = do
                 Just playlistName -> do
                     showAndSetCookie sortStateCookie    sortState
                     showAndSetCookie currPlaylistCookie (playlistId, playlistName)
-                    showAndSetCookie matchNumberCookie  1
+                    showAndSetCookie matchNumberCookie  (1 :: Integer)
                     -- showAndSetCookie judgementsCookie   ([] :: [(Types.TrackId, Types.TrackId)])
                     return ()
                 Nothing -> return ()
@@ -156,13 +158,13 @@ updateHistory _ _ EQ = error "Match tie feature is not implemented"
 sorterJudgementResource :: Ordering -> Handler Html
 sorterJudgementResource ord = defaultLayout $ do
     maybeMatchNumber <- readAndLookupCookie matchNumberCookie
-    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+    maybeSortState :: TrackSortState
         <- readAndLookupCookie sortStateCookie
     -- maybeJudgements  <- readAndLookupCookie judgementsCookie
     case maybeSortState of
         Just (nextComparison, sortState) -> do
             showAndSetCookie sortStateCookie   (stepMergeSort sortState ord)
-            showAndSetCookie matchNumberCookie (1 + fromMaybe 0 maybeMatchNumber)
+            showAndSetCookie matchNumberCookie ((1 :: Integer) + fromMaybe 0 maybeMatchNumber)
             -- showAndSetCookie judgementsCookie  (updateHistory (fromMaybe [] maybeJudgements) nextComparison ord)
         _ -> return ()
     redirect SorterR
@@ -185,7 +187,7 @@ getSorterReshuffleR = defaultLayout $ do
             let (_, sortState') = initialMergeSortState shuffled
             showAndSetCookie sortStateCookie sortState'
         Nothing -> redirect SorterSetupR
-    showAndSetCookie matchNumberCookie 1
+    showAndSetCookie matchNumberCookie (1 :: Integer)
     -- showAndSetCookie judgementsCookie ([] :: [(Types.TrackId, Types.TrackId)])
     redirect SorterR
 
@@ -440,8 +442,8 @@ resolveTrack yesod trackId = do
             let track = playlist >>= Map.lookup trackId
             case track of
                 Just resolvedTrack -> return resolvedTrack
-                Nothing -> error ""
-        Nothing -> error ""
+                Nothing -> error "don't"
+        Nothing -> error "don't"
 
 main :: IO ()
 main = do

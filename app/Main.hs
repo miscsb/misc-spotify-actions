@@ -36,12 +36,13 @@ data PlaylistSorter = PlaylistSorter {
 }
 
 mkYesod "PlaylistSorter" [parseRoutes|
-    /sorter             SorterR             GET
-    /sorter/result      SorterResultR       GET
-    /sorter/setup       SorterSetupR        GET POST
-    /sorter/reshuffle   SorterReshuffleR    GET
-    /sorter/left        SorterLeftR         POST
-    /sorter/right       SorterRightR        POST
+    /             SorterHomeR      GET
+    /setup        SorterSetupR     GET POST
+    /sorter       SorterR          GET
+    /sorter/left  SorterLeftR      POST
+    /sorter/right SorterRightR     POST
+    /result       SorterResultR    GET
+    /reshuffle    SorterReshuffleR GET
 |]
 instance Yesod PlaylistSorter where
     makeSessionBackend _ = sslOnlySessions (Just <$> defaultClientSessionBackend 120 "mykey.aes")
@@ -170,6 +171,10 @@ sorterJudgementResource ord = defaultLayout $ do
     redirect SorterR
 
 -- resources
+getSorterHomeR :: Handler Html
+getSorterHomeR = do 
+    redirect SorterSetupR 
+
 postSorterLeftR :: Handler Html
 postSorterLeftR = sorterJudgementResource GT
 
@@ -447,15 +452,11 @@ resolveTrack yesod trackId = do
 
 main :: IO ()
 main = do
-    loadFile defaultConfig
-    -- _ <- forkIO (do
-    --     _ <- threadDelay 1000
-    --     () <$ openBrowser "http://localhost:3000/sorter")
-
+    port <- getEnv "PORT"
+    liftIO $ print port
     playlistCache' <- newIORef Map.empty
-
     putStrLn "Starting site"
-    warp 3000 $ PlaylistSorter {
+    warp (read port) $ PlaylistSorter {
         playlistCache = playlistCache'
     }
 

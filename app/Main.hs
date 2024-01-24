@@ -9,7 +9,7 @@
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 import Yesod hiding (count)
-import qualified Web.ClientSession as CS
+import Web.Cookie
 import Configuration.Dotenv (loadFile, defaultConfig)
 import qualified Misc.Types as Types
 import qualified Misc.Spotify as SP
@@ -17,18 +17,23 @@ import Misc.Sort
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8, decodeLatin1)
 import qualified Data.Text as T
+import qualified Data.ByteString as BS
 import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
+import Data.IORef
 import Text.Regex.PCRE((=~))
 import Text.Read
-import Web.Browser
-import Control.Concurrent
+-- import Web.Browser
+-- import Control.Concurrent
 import GHC.IO (catchAny)
 import Control.Exception (Exception)
 
-data PlaylistSorter = PlaylistSorter
+data PlaylistSorter = PlaylistSorter {
+    playlistCache :: IORef (Map Types.PlaylistId (Map Types.TrackId Types.Track))
+}
+
 mkYesod "PlaylistSorter" [parseRoutes|
     /sorter             SorterR             GET
     /sorter/result      SorterResultR       GET
@@ -38,9 +43,19 @@ mkYesod "PlaylistSorter" [parseRoutes|
     /sorter/right       SorterRightR        POST
 |]
 instance Yesod PlaylistSorter where
-    makeSessionBackend _ = sslOnlySessions $
-        fmap Just $ defaultClientSessionBackend 120 "mykey.aes"
-    yesodMiddleware = (sslOnlyMiddleware 120) . defaultYesodMiddleware
+    makeSessionBackend _ = sslOnlySessions (Just <$> defaultClientSessionBackend 120 "mykey.aes")
+    yesodMiddleware = sslOnlyMiddleware 120 . defaultYesodMiddleware
+
+-- State
+sortStateCookie    :: TypedCookie (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+currPlaylistCookie :: TypedCookie (Types.PlaylistId, T.Text)
+matchNumberCookie  :: TypedCookie Int
+judgementsCookie   :: TypedCookie [(Types.TrackId, Types.TrackId)]
+
+sortStateCookie    = "sortState"
+currPlaylistCookie = "currPlaylist"
+matchNumberCookie  = "matchNumber"
+judgementsCookie   = "judgements"
 
 -- Forms
 instance RenderMessage PlaylistSorter FormMessage where
@@ -63,9 +78,6 @@ getSorterSetupR :: Handler Html
 getSorterSetupR = do
     (widget, enctype) <- generateFormPost playlistSortParamsForm
     defaultLayout $ do
-        y <- getSession
-        liftIO $ print y
-        
         setTitle "Playlist Sorter"
         bodyStyleWidget
         [whamlet|
@@ -91,6 +103,12 @@ postSorterSetupR = do
             tracks <- liftIO $ maybe (return [])      (`SP.getPlaylistItems` playlistId) (name >> token) -- fail if name failed
                 >>= shuffle . map Types.playlistItemTrack
 
+            yesod <- getYesod
+            playlistCache' <- liftIO $ readIORef (playlistCache yesod)
+            let newPlaylistMap = Map.fromList $ map (\track -> (Types.trackId track, track)) tracks
+            let newPlaylistCache = Map.insert playlistId newPlaylistMap playlistCache'
+            _ <- liftIO $ writeIORef (playlistCache yesod) newPlaylistCache
+
             case name of
                 Just _ ->  return ()
                 Nothing -> redirect SorterSetupR
@@ -114,26 +132,22 @@ postSorterSetupR = do
                         any (\artist -> T.unpack (Types.artistName artist) =~ artistRegex') (Types.trackArtists track)
                      && T.unpack (Types.trackName track) =~ nameRegex'
                     ) tracks
-            
-            y <- getSession
-            liftIO $ print y
+
+            let sortState = initialMergeSortState (map Types.trackId tracks')
 
             case name of
                 Just playlistName -> do
-                    showAndSetSession "currPlaylist" (playlistId, playlistName)
-                    showAndSetSession "matchNumber"  1
-                    showAndSetSession "mergeSort"    (initialMergeSortState tracks')
-                    showAndSetSession "judgements"   ([] :: [(Types.Track, Types.Track)])
+                    showAndSetCookie sortStateCookie    sortState
+                    showAndSetCookie currPlaylistCookie (playlistId, playlistName)
+                    showAndSetCookie matchNumberCookie  1
+                    -- showAndSetCookie judgementsCookie   ([] :: [(Types.TrackId, Types.TrackId)])
+                    return ()
                 Nothing -> return ()
-
-            y <- getSession
-            liftIO $ print y
-
             redirect SorterR
         _ -> redirect SorterR
 
 -- util
-updateHistory :: [(Types.Track, Types.Track)] -> Either (Types.Track, Types.Track) [Types.Track] -> Ordering -> [(Types.Track, Types.Track)]
+updateHistory :: [(Types.TrackId, Types.TrackId)] -> Either (Types.TrackId, Types.TrackId) [Types.TrackId] -> Ordering -> [(Types.TrackId, Types.TrackId)]
 updateHistory history (Right _) _ = history
 updateHistory history (Left (greater, lesser)) GT = (greater, lesser):history
 updateHistory history (Left (lesser, greater)) LT = (greater, lesser):history
@@ -141,20 +155,16 @@ updateHistory _ _ EQ = error "Match tie feature is not implemented"
 
 sorterJudgementResource :: Ordering -> Handler Html
 sorterJudgementResource ord = defaultLayout $ do
-    maybeMatchNumber :: Maybe Int
-        <- readAndLookupSession "matchNumber"
-    maybeMergeState :: Maybe (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track) 
-        <- readAndLookupSession "mergeSort"
-    maybeJudgements :: Maybe [(Types.Track, Types.Track)]
-        <- readAndLookupSession "judgements"
-    
-    case maybeMergeState of
+    maybeMatchNumber <- readAndLookupCookie matchNumberCookie
+    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+        <- readAndLookupCookie sortStateCookie
+    -- maybeJudgements  <- readAndLookupCookie judgementsCookie
+    case maybeSortState of
         Just (nextComparison, sortState) -> do
-            showAndSetSession "mergeSort"   (stepMergeSort sortState ord)
-            showAndSetSession "matchNumber" (1 + fromMaybe 0 maybeMatchNumber)
-            showAndSetSession "judgements"  (updateHistory (fromMaybe [] maybeJudgements) nextComparison ord)
+            showAndSetCookie sortStateCookie   (stepMergeSort sortState ord)
+            showAndSetCookie matchNumberCookie (1 + fromMaybe 0 maybeMatchNumber)
+            -- showAndSetCookie judgementsCookie  (updateHistory (fromMaybe [] maybeJudgements) nextComparison ord)
         _ -> return ()
-    
     redirect SorterR
 
 -- resources
@@ -166,33 +176,29 @@ postSorterRightR = sorterJudgementResource LT
 
 getSorterReshuffleR :: Handler Html
 getSorterReshuffleR = defaultLayout $ do
-    clientId     <- liftIO $ getEnv "CLIENT_ID"
-    clientSecret <- liftIO $ getEnv "CLIENT_SECRET"
-
-    maybeToken   <- liftIO $ SP.authWithClientCredentials clientId clientSecret
-    maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
-        <- readAndLookupSession "currPlaylist"
-
-    case (maybeCurrPlaylist, maybeToken) of
-        (Just (playlistId, _), Just token) -> do
-            tracks <- liftIO $ (`SP.getPlaylistItems` playlistId) token
-                >>= shuffle . map Types.playlistItemTrack
-            showAndSetSession "matchNumber" 1
-            showAndSetSession "judgements"  ([] :: [(Types.Track, Types.Track)])
-            showAndSetSession "mergeSort"   (initialMergeSortState tracks)
-        _ -> return ()
+    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+        <- readAndLookupCookie sortStateCookie
+    case maybeSortState of
+        (Just (_, sortState)) -> do
+            let currItems = concat $ currentOrdering sortState
+            shuffled <- liftIO $ shuffle currItems
+            let (_, sortState') = initialMergeSortState shuffled
+            showAndSetCookie sortStateCookie sortState'
+        Nothing -> redirect SorterSetupR
+    showAndSetCookie matchNumberCookie 1
+    -- showAndSetCookie judgementsCookie ([] :: [(Types.TrackId, Types.TrackId)])
     redirect SorterR
 
 getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
-    maybeMergeState :: Maybe (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track) 
-        <- readAndLookupSession "mergeSort"
+    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+        <- readAndLookupCookie sortStateCookie
     maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
-        <- readAndLookupSession "currPlaylist"
+        <- readAndLookupCookie currPlaylistCookie
 
     setTitle "Playlist Sorter"
     bodyStyleWidget
-    case (maybeMergeState, maybeCurrPlaylist) of
+    case (maybeSortState, maybeCurrPlaylist) of
         (Just (_, MergeSortComplete sorted), Just (playlistId, playlistName)) -> foldl (>>) [whamlet|
             <h1>Playlist Sorter
             <div>
@@ -216,21 +222,15 @@ getSorterResultR = defaultLayout $ do
 
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
-    maybeMergeState :: Maybe (Either (Types.Track, Types.Track) [Types.Track], MergeSortState Types.Track) 
-        <- readAndLookupSession "mergeSort"
+    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+        <- readAndLookupCookie sortStateCookie
     maybeMatchNumber :: Maybe Int
-        <- readAndLookupSession "matchNumber"
+        <- readAndLookupCookie matchNumberCookie
     maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
-        <- readAndLookupSession "currPlaylist"
-    
-    liftIO $ do
-        print (maybeMergeState) >> print (maybeMatchNumber) >> print (maybeCurrPlaylist)
+        <- readAndLookupCookie currPlaylistCookie
 
-    y <- getSession
-    liftIO $ print y
-
-    case (maybeMergeState, maybeMatchNumber, maybeCurrPlaylist) of
-        (Just (nextComparison, mergeSort'), Just matchNumber', Just (playlistId, playlistName)) -> do 
+    case (maybeSortState, maybeMatchNumber, maybeCurrPlaylist) of
+        (Just (nextComparison, mergeSort'), Just matchNumber', Just (playlistId, playlistName)) -> do
             let remainingMatches = estimateComparisonsLeft mergeSort'
             let percentComplete = div (100 * (matchNumber' - 1)) (fromIntegral remainingMatches + (matchNumber' - 1))
 
@@ -250,14 +250,19 @@ getSorterR = defaultLayout $ do
                     Right _ -> redirect SorterResultR
                     Left comparison -> trackComparisonWidget comparison
 
+            -- toWidget [whamlet|
+            --     <div style="width: 65%; float:left;">
+            --         ^{leftPageTop}
+            --         ^{leftPageBottom}
+            --     <div style="width: 35%; float:right;">
+            --         <h3>Win-loss records
+            --         <div style="height: 400px; overflow-y: scroll;">
+            --             ^{leaderboardWidget}
+            -- |]
             toWidget [whamlet|
                 <div style="width: 65%; float:left;">
                     ^{leftPageTop}
                     ^{leftPageBottom}
-                <div style="width: 35%; float:right;">
-                    <h3>Win-loss records
-                    <div style="height: 400px; overflow-y: scroll;">
-                        ^{leaderboardWidget}
             |]
         _ -> redirect SorterSetupR
 
@@ -332,10 +337,12 @@ bodyStyleWidget = toWidget
             width: 100%
     |]
 
-rankedTrackWidget :: T.Text -> Types.Track -> WidgetFor PlaylistSorter ()
+rankedTrackWidget :: T.Text -> Types.TrackId -> WidgetFor PlaylistSorter ()
 rankedTrackWidget rank track = do
+    yesod <- getYesod
+    resolvedTrack <- resolveTrack yesod track
     toWidget [whamlet|
-        <p>#{rank} | #{Types.trackName track}
+        <p>#{rank} | #{Types.trackName resolvedTrack}
     |]
 
 trackAuthorWidget :: Types.Track -> WidgetFor PlaylistSorter ()
@@ -362,67 +369,93 @@ trackImageWidget track = do
         <img src="#{imageUrl}" alt="#{Types.trackName track}", height="200", width="200">
     |]
 
-trackComparisonWidget :: (Types.Track, Types.Track) -> WidgetFor PlaylistSorter ()
+trackComparisonWidget :: (Types.TrackId, Types.TrackId) -> WidgetFor PlaylistSorter ()
 trackComparisonWidget (trackLeft, trackRight) = do
+    yesod <- getYesod
+    resolvedTrackLeft  <- resolveTrack yesod trackLeft
+    resolvedTrackRight <- resolveTrack yesod trackRight
     toWidget [whamlet|
         <div class="grid-container-4">
             <div class="grid-item">
-                ^{trackImageWidget  trackLeft}
+                ^{trackImageWidget  resolvedTrackLeft}
             <div class="grid-item">
-                ^{trackAuthorWidget trackLeft}
+                ^{trackAuthorWidget resolvedTrackLeft}
             <div class="grid-item">
-                ^{trackAuthorWidget trackRight}
+                ^{trackAuthorWidget resolvedTrackRight}
             <div class="grid-item">
-                ^{trackImageWidget  trackRight}
+                ^{trackImageWidget  resolvedTrackRight}
         <div class="grid-container-4">
             <div class="grid-item-2">
-                ^{trackAudioWidget  trackLeft}
+                ^{trackAudioWidget  resolvedTrackLeft}
             <div class="grid-item-2">
                 <form action="@{SorterLeftR}", method="POST">
-                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackLeft} wins">
+                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName resolvedTrackLeft} wins">
             <div class="grid-item-2">
                 <form action="@{SorterRightR}", method="POST">
-                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName trackRight} wins">
+                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName resolvedTrackRight} wins">
             <div class="grid-item-2">
-                ^{trackAudioWidget trackRight}
+                ^{trackAudioWidget resolvedTrackRight}
     |]
 
 judgementHistoryWidget :: WidgetFor PlaylistSorter ()
 judgementHistoryWidget = do
-    x <- readAndLookupSession "judgements" -- :: Maybe [(Types.Track, Types.Track)]
-    let judgements' = fromMaybe [] x
+    judgements <- fromMaybe [] <$> readAndLookupCookie judgementsCookie
     let judgementItemWidget (greater, lesser) = do
-          toWidget [whamlet| <p>#{Types.trackName greater} > #{Types.trackName lesser} |]
-    foldl (>>) [whamlet||] $ map judgementItemWidget judgements'
+          yesod <- getYesod
+          resolvedLesser  <- resolveTrack yesod lesser
+          resolvedGreater <- resolveTrack yesod greater
+          toWidget [whamlet| <p>#{Types.trackName resolvedGreater} > #{Types.trackName resolvedLesser} |]
+    foldl (>>) [whamlet||] $ map judgementItemWidget judgements
 
 leaderboardWidget :: WidgetFor PlaylistSorter ()
 leaderboardWidget = do
-    x <- readAndLookupSession "judgements" -- :: Maybe [(Types.Track, Types.Track)]
-    let judgements' = fromMaybe [] x
+    judgements <- fromMaybe [] <$> readAndLookupCookie judgementsCookie
     let combiner (trackLeftId, trackRightId) =
           Map.insertWith f trackLeftId  (1, 0) .
           Map.insertWith f trackRightId (0, 1)
             where f (w, l) (dw, dl) = (w+dw, l+dl)
-    let winLossMap = foldl (flip combiner) Map.empty judgements' :: Map Types.Track (Int, Int)
+    let winLossMap = foldl (flip combiner) Map.empty judgements :: Map Types.TrackId (Int, Int)
     let comparator (_, (winL, lossL)) (_, (winR, lossR))
           | winL - lossL > winR - lossR = LT
           | winL - lossL < winR - lossR = GT
           | winL > winR = LT
           | winL < winR = GT
           | otherwise = EQ
-    let winLossList = List.sortBy comparator (Map.toList winLossMap) :: [(Types.Track, (Int, Int))]
+    let winLossList = List.sortBy comparator (Map.toList winLossMap) :: [(Types.TrackId, (Int, Int))]
     let leaderboardItemWidget (track, (wins, losses)) = do
-          toWidget [whamlet| <p>#{wins}W / #{losses}L &nbsp;&nbsp;&nbsp;&nbsp; #{Types.trackName track} |]
+          yesod <- getYesod
+          resolvedTrack <- resolveTrack yesod track
+          toWidget [whamlet| <p>#{wins}W / #{losses}L &nbsp;&nbsp;&nbsp;&nbsp; #{Types.trackName resolvedTrack} |]
     foldl (>>) [whamlet||] $ map leaderboardItemWidget winLossList
+    return ()
+
+resolveTrack :: (MonadHandler m) => PlaylistSorter -> Types.TrackId -> m Types.Track
+resolveTrack yesod trackId = do
+    maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
+        <- readAndLookupCookie currPlaylistCookie
+    case maybeCurrPlaylist of
+        Just (playlistId, _) -> do
+            playlistCache' <- liftIO $ readIORef (playlistCache yesod)
+            let playlist = Map.lookup playlistId playlistCache'
+            let track = playlist >>= Map.lookup trackId
+            case track of
+                Just resolvedTrack -> return resolvedTrack
+                Nothing -> error ""
+        Nothing -> error ""
 
 main :: IO ()
 main = do
     loadFile defaultConfig
-    _ <- forkIO (do
-        _ <- threadDelay 1000
-        () <$ openBrowser "http://localhost:3000/sorter")
+    -- _ <- forkIO (do
+    --     _ <- threadDelay 1000
+    --     () <$ openBrowser "http://localhost:3000/sorter")
+
+    playlistCache' <- newIORef Map.empty
+
     putStrLn "Starting site"
-    warp 3000 $ PlaylistSorter
+    warp 3000 $ PlaylistSorter {
+        playlistCache = playlistCache'
+    }
 
 parsePlaylistInput :: T.Text -> T.Text
 parsePlaylistInput input =
@@ -432,10 +465,12 @@ parsePlaylistInput input =
     in str''
 
 -- serialization
-showAndSetSession :: (MonadHandler m, Show a) => T.Text -> a -> m ()
-showAndSetSession name value = setSession name (T.pack $ show value)
+type TypedCookie a = BS.ByteString
 
-readAndLookupSession :: (MonadHandler m, Read a) => T.Text -> m (Maybe a)
-readAndLookupSession name = do
-    stored <- lookupSession name
+showAndSetCookie :: (MonadHandler m, Show a) => TypedCookie a -> a -> m ()
+showAndSetCookie name value = setCookie $ defaultSetCookie { setCookieName = name, setCookieValue = encodeUtf8 $ T.pack $ show value }
+
+readAndLookupCookie :: (MonadHandler m, Read a) => TypedCookie a -> m (Maybe a)
+readAndLookupCookie name = do
+    stored <- lookupCookie (decodeLatin1 name)
     return (stored >>= readMaybe . T.unpack)

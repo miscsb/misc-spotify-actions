@@ -56,6 +56,8 @@ executable playlist-sorter
                       yesod,
                       yesod-form,
                       clientsession,
+                      case-insensitive,
+                      cookie,
                    -- multithreading/processing
                       process ^>= 1.6.17.0,
                       dotenv ^>= 0.11.0.2,

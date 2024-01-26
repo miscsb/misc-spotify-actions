@@ -29,19 +29,21 @@ import GHC.IO (catchAny)
 import Control.Exception (Exception)
 
 data PlaylistSorter = PlaylistSorter {
-    playlistCache :: IORef (Map Types.PlaylistId (Map Types.TrackId Types.Track))
+    playlistCache :: IORef (Map Types.PlaylistId (Map Types.TrackId Types.Track)),
+    myApproot :: T.Text
 }
 
 mkYesod "PlaylistSorter" [parseRoutes|
-    /             SorterHomeR      GET
-    /setup        SorterSetupR     GET POST
-    /sorter       SorterR          GET
-    /sorter/left  SorterLeftR      POST
-    /sorter/right SorterRightR     POST
-    /result       SorterResultR    GET
-    /reshuffle    SorterReshuffleR GET
+    /          SorterHomeR      GET
+    /setup     SorterSetupR     GET POST
+    /sorter           SorterR          GET
+    /sorter/left      SorterLeftR      POST
+    /sorter/right     SorterRightR     POST
+    /result    SorterResultR    GET
+    /reshuffle SorterReshuffleR GET
 |]
-instance Yesod PlaylistSorter
+instance Yesod PlaylistSorter where
+    approot = ApprootMaster myApproot
 
 -- State
 type TrackSortState = Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
@@ -446,11 +448,13 @@ resolveTrack yesod trackId = do
 main :: IO ()
 main = do
     loadFile defaultConfig
+    myApproot <- fmap T.pack $ getEnv "APPROOT"
     port <- getEnv "PORT"
     liftIO $ print port
     playlistCache' <- newIORef Map.empty
     putStrLn "Starting site"
     warp (read port) $ PlaylistSorter {
+        myApproot = myApproot,
         playlistCache = playlistCache'
     }
 

@@ -16,7 +16,6 @@ import qualified Misc.Spotify as SP
 import Misc.Sort
 import System.Environment ( getEnv )
 import Data.Text.Encoding (encodeUtf8, decodeLatin1)
-import Data.CaseInsensitive (mk)
 import qualified Data.Text as T
 import qualified Data.ByteString as BS
 import qualified Data.Map as Map
@@ -26,8 +25,6 @@ import Data.Maybe (fromMaybe)
 import Data.IORef
 import Text.Regex.PCRE((=~))
 import Text.Read
--- import Web.Browser
--- import Control.Concurrent
 import GHC.IO (catchAny)
 import Control.Exception (Exception)
 
@@ -44,9 +41,7 @@ mkYesod "PlaylistSorter" [parseRoutes|
     /result       SorterResultR    GET
     /reshuffle    SorterReshuffleR GET
 |]
-instance Yesod PlaylistSorter where
-    makeSessionBackend _ = sslOnlySessions (Just <$> defaultClientSessionBackend 120 "mykey.aes")
-    yesodMiddleware = sslOnlyMiddleware 120 . defaultYesodMiddleware
+instance Yesod PlaylistSorter
 
 -- State
 type TrackSortState = Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
@@ -189,7 +184,7 @@ getSorterReshuffleR = defaultLayout $ do
         (Just (_, sortState)) -> do
             let currItems = concat $ currentOrdering sortState
             shuffled <- liftIO $ shuffle currItems
-            let (_, sortState') = initialMergeSortState shuffled
+            let sortState' = initialMergeSortState shuffled
             showAndSetCookie sortStateCookie sortState'
         Nothing -> redirect SorterSetupR
     showAndSetCookie matchNumberCookie (1 :: Integer)
@@ -210,8 +205,7 @@ getSorterResultR = defaultLayout $ do
             <h1>Playlist Sorter
             <div>
                 <p>You sorted the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
-                    <form class="inline-block", action="@{SorterReshuffleR}", method="GET"> 
-                        <input class="btn-link inline-block" type="submit" value="Restart">
+                    <a class="btn-link", href="@{SorterReshuffleR}">Restart</a>
                     <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
             <p>These are the results of the sort:
             |] $ zipWith rankedTrackWidget (map (T.pack . show) ([1..] :: [Integer])) sorted
@@ -247,8 +241,7 @@ getSorterR = defaultLayout $ do
                 <h1>Playlist Sorter
                 <div>
                     <p class="inline-block">You are sorting the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
-                    <form class="inline-block", action="@{SorterReshuffleR}", method="GET"> 
-                        <input class="btn-link inline-block" type="submit" value="Restart">
+                    <a class="btn-link", href="@{SorterReshuffleR}">Restart</a>
                     <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
                 <p>Match #{matchNumber'}. Progress #{percentComplete}% (approximately #{remainingMatches} comparisons left)
                 <br>
@@ -447,11 +440,12 @@ resolveTrack yesod trackId = do
             let track = playlist >>= Map.lookup trackId
             case track of
                 Just resolvedTrack -> return resolvedTrack
-                Nothing -> error "don't"
-        Nothing -> error "don't"
+                Nothing -> error "NOOOO"
+        Nothing -> error "NOOOO"
 
 main :: IO ()
 main = do
+    loadFile defaultConfig
     port <- getEnv "PORT"
     liftIO $ print port
     playlistCache' <- newIORef Map.empty
@@ -471,7 +465,7 @@ parsePlaylistInput input =
 type TypedCookie a = BS.ByteString
 
 showAndSetCookie :: (MonadHandler m, Show a) => TypedCookie a -> a -> m ()
-showAndSetCookie name value = setCookie $ defaultSetCookie { setCookieName = name, setCookieValue = encodeUtf8 $ T.pack $ show value }
+showAndSetCookie name value = setCookie $ defaultSetCookie { setCookiePath = Just "/", setCookieName = name, setCookieValue = encodeUtf8 $ T.pack $ show value }
 
 readAndLookupCookie :: (MonadHandler m, Read a) => TypedCookie a -> m (Maybe a)
 readAndLookupCookie name = do

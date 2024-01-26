@@ -34,13 +34,13 @@ data PlaylistSorter = PlaylistSorter {
 }
 
 mkYesod "PlaylistSorter" [parseRoutes|
-    /          SorterHomeR      GET
-    /setup     SorterSetupR     GET POST
-    /sorter           SorterR          GET
-    /sorter/left      SorterLeftR      POST
-    /sorter/right     SorterRightR     POST
-    /result    SorterResultR    GET
-    /reshuffle SorterReshuffleR GET
+    /               SorterHomeR      GET
+    /setup          SorterSetupR     GET POST
+    /sorter         SorterR          GET
+    /sorter/left    SorterLeftR      POST
+    /sorter/right   SorterRightR     POST
+    /result         SorterResultR    GET
+    /reshuffle      SorterReshuffleR GET
 |]
 instance Yesod PlaylistSorter where
     approot = ApprootMaster myApproot

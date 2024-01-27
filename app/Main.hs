@@ -47,7 +47,7 @@ instance Yesod PlaylistSorter where
 
 -- State
 type TrackSortState = Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
-sortStateCookie    :: TypedCookie (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+sortStateCookie    :: TypedCookie TrackSortState
 currPlaylistCookie :: TypedCookie (Types.PlaylistId, T.Text)
 matchNumberCookie  :: TypedCookie Int
 judgementsCookie   :: TypedCookie [(Types.TrackId, Types.TrackId)]
@@ -160,7 +160,7 @@ sorterJudgementResource ord = defaultLayout $ do
         <- readAndLookupCookie sortStateCookie
     -- maybeJudgements  <- readAndLookupCookie judgementsCookie
     case maybeSortState of
-        Just (nextComparison, sortState) -> do
+        Just (_, sortState) -> do
             showAndSetCookie sortStateCookie   (stepMergeSort sortState ord)
             showAndSetCookie matchNumberCookie ((1 :: Integer) + fromMaybe 0 maybeMatchNumber)
             -- showAndSetCookie judgementsCookie  (updateHistory (fromMaybe [] maybeJudgements) nextComparison ord)
@@ -169,8 +169,8 @@ sorterJudgementResource ord = defaultLayout $ do
 
 -- resources
 getSorterHomeR :: Handler Html
-getSorterHomeR = do 
-    redirect SorterSetupR 
+getSorterHomeR = do
+    redirect SorterSetupR
 
 postSorterLeftR :: Handler Html
 postSorterLeftR = sorterJudgementResource GT
@@ -180,7 +180,7 @@ postSorterRightR = sorterJudgementResource LT
 
 getSorterReshuffleR :: Handler Html
 getSorterReshuffleR = defaultLayout $ do
-    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+    maybeSortState :: TrackSortState
         <- readAndLookupCookie sortStateCookie
     case maybeSortState of
         (Just (_, sortState)) -> do
@@ -195,7 +195,7 @@ getSorterReshuffleR = defaultLayout $ do
 
 getSorterResultR :: Handler Html
 getSorterResultR = defaultLayout $ do
-    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+    maybeSortState :: TrackSortState
         <- readAndLookupCookie sortStateCookie
     maybeCurrPlaylist :: Maybe (Types.PlaylistId, T.Text)
         <- readAndLookupCookie currPlaylistCookie
@@ -225,7 +225,7 @@ getSorterResultR = defaultLayout $ do
 
 getSorterR :: Handler Html
 getSorterR = defaultLayout $ do
-    maybeSortState :: Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+    maybeSortState :: TrackSortState
         <- readAndLookupCookie sortStateCookie
     maybeMatchNumber :: Maybe Int
         <- readAndLookupCookie matchNumberCookie
@@ -448,13 +448,11 @@ resolveTrack yesod trackId = do
 main :: IO ()
 main = do
     loadFile defaultConfig
-    myApproot <- fmap T.pack $ getEnv "APPROOT"
     port <- getEnv "PORT"
-    liftIO $ print port
+    myApproot' <- T.pack <$> getEnv "APPROOT"
     playlistCache' <- newIORef Map.empty
-    putStrLn "Starting site"
     warp (read port) $ PlaylistSorter {
-        myApproot = myApproot,
+        myApproot = myApproot',
         playlistCache = playlistCache'
     }
 

@@ -10,16 +10,16 @@ import Control.Monad.Trans.State (runState)
 
 interactiveSort :: [Int] -> [Int]
 interactiveSort xs =
-    let state0 = initialMergeSortState xs
+    let state0 = newSort xs
         comparator (Left (valueLeft, valueRight)) = compare valueLeft valueRight
         comparator (Right _) = error "impossible"
         state' = until (\(a, s) -> case a of 
             Left _ -> False
             Right _ -> True) 
-            (\(a, s) -> runState (comparisonToMergeSortState (comparator a)) s) state0
+            (\(a, s) -> runState (judge (comparator a)) s) state0
     in case state' of
-        (_, MergeSortComplete sorted) -> sorted
-        (_, MergeSortIncomplete _) -> error "impossible"
+        (_, SortComplete sorted) -> sorted
+        (_, SortIncomplete _) -> error "impossible"
 
 sortTest1 :: Assertion
 sortTest1 = assertEqual "should be sorted" [8,7..1] (interactiveSort [8,1,7,2,6,3,5,4])

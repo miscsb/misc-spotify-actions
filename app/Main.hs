@@ -46,7 +46,7 @@ instance Yesod PlaylistSorter where
     approot = ApprootMaster myApproot
 
 -- State
-type TrackSortState = Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], MergeSortState Types.TrackId)
+type TrackSortState = Maybe (Either (Types.TrackId, Types.TrackId) [Types.TrackId], SortState Types.TrackId)
 sortStateCookie    :: TypedCookie TrackSortState
 currPlaylistCookie :: TypedCookie (Types.PlaylistId, T.Text)
 matchNumberCookie  :: TypedCookie Int
@@ -133,7 +133,7 @@ postSorterSetupR = do
                      && T.unpack (Types.trackName track) =~ nameRegex'
                     ) tracks
 
-            let sortState = initialMergeSortState (map Types.trackId tracks')
+            let sortState = newSort (map Types.trackId tracks')
 
             case name of
                 Just playlistName -> do
@@ -161,7 +161,7 @@ sorterJudgementResource ord = defaultLayout $ do
         <- readAndLookupCookie sortStateCookie
     case maybeSortState of
         Just (_, sortState) -> do
-            showAndSetCookie sortStateCookie   (stepMergeSort sortState ord)
+            showAndSetCookie sortStateCookie   (stepSort sortState ord)
             showAndSetCookie matchNumberCookie ((1 :: Integer) + fromMaybe 0 maybeMatchNumber)
         _ -> return ()
 
@@ -184,7 +184,7 @@ getSorterReshuffleR = defaultLayout $ do
         (Just (_, sortState)) -> do
             let currItems = concat $ currentOrdering sortState
             shuffled <- liftIO $ shuffle currItems
-            let sortState' = initialMergeSortState shuffled
+            let sortState' = newSort shuffled
             showAndSetCookie sortStateCookie sortState'
         Nothing -> redirect SorterSetupR
     showAndSetCookie matchNumberCookie (1 :: Integer)
@@ -201,7 +201,7 @@ getSorterResultR = defaultLayout $ do
     setTitle "Playlist Sorter"
     bodyStyleWidget
     case (maybeSortState, maybeCurrPlaylist) of
-        (Just (_, MergeSortComplete sorted), Just (playlistId, playlistName)) -> foldl (>>) [whamlet|
+        (Just (_, SortComplete sorted), Just (playlistId, playlistName)) -> foldl (>>) [whamlet|
             <h1>Playlist Sorter
             <div>
                 <p>You sorted the playlist <a class="btn-link", href="https://open.spotify.com/playlist/#{decodeLatin1 playlistId}", target="_blank">#{playlistName}</a>.
@@ -209,7 +209,7 @@ getSorterResultR = defaultLayout $ do
                     <a class="btn-link", href="@{SorterSetupR}">Change Playlist</a>
             <p>These are the results of the sort:
             |] $ zipWith rankedTrackWidget (map (T.pack . show) ([1..] :: [Integer])) sorted
-        (Just (_, state@(MergeSortIncomplete _)), Just (playlistId, playlistName)) ->
+        (Just (_, state@(SortIncomplete _)), Just (playlistId, playlistName)) ->
             let ordering = currentOrderingRanks state
             in foldl (>>) [whamlet|
                 <h1>Playlist Sorter

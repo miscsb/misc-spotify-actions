@@ -1,10 +1,18 @@
 {-# OPTIONS_GHC -Wno-unused-matches #-}
-module Misc.Sort where
+module Misc.Sort (
+    stepSort,
+    judge,
+    newSort,
+    estimateComparisonsLeft,
+    currentOrdering,
+    currentOrderingRanks,
+    SortState(SortComplete, SortIncomplete)
+) where
 
 import qualified System.Random
 import Data.Array.IO hiding (newArray)
 import Control.Monad
-import Data.List (transpose)
+import Data.List (transpose, singleton)
 import Control.Monad.Trans.State
 
 -- https://wiki.haskell.org/Random_shuffle
@@ -25,85 +33,75 @@ shuffle xs = do
 data MergeState a = MergeComplete [a] | MergeIncomplete ([a], [a], [a])
     deriving (Show, Read)
 
-comparisonToMergeState :: Ordering -> State (MergeState a) (Either (a, a) [a])
-comparisonToMergeState ord = state (\mergeState ->
-    let mergeState' = stepMerge mergeState ord
-    in case mergeState' of
-        MergeComplete merged -> (Right merged, mergeState')
-        MergeIncomplete (left, right, _) -> (Left (head left, head right), mergeState')
-    )
+newMerge :: [a] -> [a] -> MergeState a
+newMerge currL@(headL:_) currR@(headR:_) = MergeIncomplete (currL, currR, [])
+newMerge merged [] = MergeComplete merged
+newMerge [] merged = MergeComplete merged
 
-stepMerge :: MergeState a -> Ordering -> MergeState a
-stepMerge mergeState@(MergeComplete mergeRun) _ = mergeState
-stepMerge ms EQ = ms
-stepMerge (MergeIncomplete (left, right, temp)) GT =
-    let temp' = temp ++ take 1 left
-        left' = drop 1 left
-    in case left' of
-        [] -> MergeComplete (temp' ++ right)
-        _  -> MergeIncomplete (left', right, temp')
-stepMerge (MergeIncomplete (left, right, temp)) LT
+stepMerge :: MergeState a -> Ordering -> (Either (a, a) [a], MergeState a)
+stepMerge mergeState@(MergeComplete merged) _ = (Right merged, mergeState)
+stepMerge (MergeIncomplete ([x],     right, temp)) GT = (Right merged, MergeComplete merged)
+    where merged = temp ++ [x] ++ right
+stepMerge (MergeIncomplete (x:left', right, temp)) GT 
+    = (Left (head left', head right), MergeIncomplete (left', right, temp ++ [x]))
+stepMerge (MergeIncomplete (left, right, temp)) LT 
     = stepMerge (MergeIncomplete (right, left, temp)) GT
 
-data MergeLayerState a = MergeLayerComplete [[a]] | MergeLayerIncomplete ([[a]], MergeState a, [[a]])
+data LayerState a = LayerComplete [[a]] | LayerIncomplete ([[a]], MergeState a, [[a]])
     deriving (Show, Read)
 
-comparisonToMergeLayerState :: Ordering -> State (MergeLayerState a) (Either (a, a) [[a]])
-comparisonToMergeLayerState ord = state (`stepMergeLayer` ord)
+startNewLayer :: [[a]] -> SortState a
+startNewLayer (currL:currR:next) = SortIncomplete $ LayerIncomplete ([], newMerge currL currR, next)
+startNewLayer [xs] = SortComplete xs
+startNewLayer [] = SortComplete []
 
-stepMergeLayer :: MergeLayerState a -> Ordering -> (Either (a, a) [[a]], MergeLayerState a)
-stepMergeLayer layerState@(MergeLayerComplete layer) _ = (Right layer, layerState)
-stepMergeLayer (MergeLayerIncomplete (prev, mergeState@(MergeIncomplete _), next)) ord =
-    let (comparisonResult, mergeState') = runState (comparisonToMergeState ord) mergeState
+stepLayer :: LayerState a -> Ordering -> (Either (a, a) [[a]], LayerState a)
+stepLayer layerState@(LayerComplete layer) _ = (Right layer, layerState)
+stepLayer (LayerIncomplete (prev, mergeState@(MergeIncomplete _), next)) ord =
+    let (comparisonResult, mergeState') = runState (state (`stepMerge` ord)) mergeState
     in case comparisonResult of
-        Right merged ->
-            let prev' = prev ++ filter (not . null) [merged]
-            in case (prev', next) of
-                (_, [])          -> (Right prev',  MergeLayerComplete prev')
-                (_, [singleRun]) -> (Right prev'', MergeLayerComplete prev'')
-                    where prev'' = prev' ++ [singleRun]
-                (_, nextL:nextR:next') -> (Left (head nextL, head nextR), MergeLayerIncomplete (prev', MergeIncomplete (nextL, nextR, []), next'))
-        Left nextComparison -> (Left nextComparison, MergeLayerIncomplete (prev, mergeState', next))
-stepMergeLayer (MergeLayerIncomplete (_, MergeComplete _, _)) _ = error "Not allowed 1"
+        Right merged -> case next of
+            nextL:nextR:next' -> 
+                (Left (head nextL, head nextR), LayerIncomplete (prev ++ [merged], newMerge nextL nextR, next'))
+            rem -> (Right layer, LayerComplete layer) 
+                where layer = prev ++ [merged] ++ rem
+        Left nextComparison -> (Left nextComparison, LayerIncomplete (prev, mergeState', next))
 
-data MergeSortState a = MergeSortComplete [a] | MergeSortIncomplete (MergeLayerState a)
+data SortState a = SortComplete [a] | SortIncomplete (LayerState a)
     deriving (Show, Read)
 
-comparisonToMergeSortState :: Ordering -> State (MergeSortState a) (Either (a, a) [a])
-comparisonToMergeSortState ord = state (`stepMergeSort` ord)
+judge :: Ordering -> State (SortState a) (Either (a, a) [a])
+judge ord = state (`stepSort` ord)
 
-initialMergeSortState :: [a] -> (Either (a, a) [a], MergeSortState a)
-initialMergeSortState [ ] = (Right [ ], MergeSortComplete [ ])
-initialMergeSortState [x] = (Right [x], MergeSortComplete [x])
-initialMergeSortState (nextL:nextR:remaining) = (Left (nextL, nextR), MergeSortIncomplete (MergeLayerIncomplete ([], MergeIncomplete ([nextL], [nextR], []), [[x] | x <- remaining])))
+newSort :: [a] -> (Either (a, a) [a], SortState a)
+newSort xs@(nextL:nextR:_) = (Left (nextL, nextR), startNewLayer $ map singleton xs)
+newSort xs = (Right xs, SortComplete xs)
 
-stepMergeSort :: MergeSortState a -> Ordering -> (Either (a, a) [a], MergeSortState a)
-stepMergeSort sortState@(MergeSortComplete sorted) _ = (Right sorted, sortState)
-stepMergeSort (MergeSortIncomplete layerState) ord =
-    let (comparisonResult, layerState') = runState (comparisonToMergeLayerState ord) layerState
+stepSort :: SortState a -> Ordering -> (Either (a, a) [a], SortState a)
+stepSort sortState@(SortComplete sorted) _ = (Right sorted, sortState)
+stepSort (SortIncomplete layerState) ord =
+    let (comparisonResult, layerState') = runState (state (`stepLayer` ord)) layerState
     in case comparisonResult of
-        Right []          -> (Right [], MergeSortComplete [])
-        Right [singleRun] -> (Right singleRun, MergeSortComplete singleRun)
-        Right (nextL:nextR:nextLayer) -> (Left (head nextL, head nextR), MergeSortIncomplete (MergeLayerIncomplete ([], MergeIncomplete (nextL, nextR, []), nextLayer)))
-        Left nextComparison -> (Left nextComparison, MergeSortIncomplete layerState')
+        Right [singleRun] -> (Right singleRun, SortComplete singleRun)
+        Right nextLayer@(nextL:nextR:_) -> (Left (head nextL, head nextR), startNewLayer nextLayer)
+        Left nextComparison -> (Left nextComparison, SortIncomplete layerState')
 
-currentOrdering :: MergeSortState a -> [[a]]
-currentOrdering (MergeSortComplete sorted) = [[x] | x <- sorted]
-currentOrdering (MergeSortIncomplete (MergeLayerIncomplete (runsPrev, MergeIncomplete (currLeft, currRight, currRun), runsNext))) =
+currentOrdering :: SortState a -> [[a]]
+currentOrdering (SortComplete sorted) = [[x] | x <- sorted]
+currentOrdering (SortIncomplete (LayerIncomplete (runsPrev, MergeIncomplete (currLeft, currRight, currRun), runsNext))) =
         -- within (runsPrev ++ runsNext ++ [currRun]), group elements by how many other elements are better
     let groupedFromZero = transpose (runsPrev ++ runsNext ++ [currRun])
         -- same thing as above, but for remaining elements in current merge
         groupedFromCurr = replicate (length currRun) [] ++ transpose [currLeft, currRight]
         -- combine groupedFromZero and groupedFromCurr
-        combine :: [[a]] -> [[a]] -> [[a]]
         combine xs [] = xs
         combine [] ys = ys
         combine (x:xs) (y:ys) = (x ++ y) : combine xs ys
     in combine groupedFromZero groupedFromCurr
-currentOrdering (MergeSortIncomplete (MergeLayerIncomplete (runsPrev, MergeComplete currRun, runsNext)))
+currentOrdering (SortIncomplete (LayerIncomplete (runsPrev, MergeComplete currRun, runsNext)))
     = transpose (runsPrev ++ runsNext ++ [currRun])
 
-currentOrderingRanks :: MergeSortState a -> [(Int, [a])]
+currentOrderingRanks :: SortState a -> [(Int, [a])]
 currentOrderingRanks mergeSort =
     let groups = currentOrdering mergeSort
         ranks = scanl (+) 1 (map length groups)
@@ -131,7 +129,7 @@ estimateFutureLayers (length, blockSize)
     | blockSize > length = 0
     | otherwise          = estimateFutureLayers (length, blockSize * 2) + estimateComparisonsLeftLayer blockSize length
 
-estimateComparisonsLeft :: MergeSortState a -> Int
-estimateComparisonsLeft (MergeSortComplete _) = 0
-estimateComparisonsLeft (MergeSortIncomplete (MergeLayerIncomplete (runsPrev, merge, runsNext)))
+estimateComparisonsLeft :: SortState a -> Int
+estimateComparisonsLeft (SortComplete _) = 0
+estimateComparisonsLeft (SortIncomplete (LayerIncomplete (runsPrev, merge, runsNext)))
     = estimateFutureLayers (recoverLengthBlockSize runsPrev runsNext merge) + sum (map length runsNext) + estimateComparisonsLeftMerge merge

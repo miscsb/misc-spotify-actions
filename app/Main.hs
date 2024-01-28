@@ -155,17 +155,15 @@ updateHistory _ _ EQ = error "Match tie feature is not implemented"
 
 sorterJudgementResource :: Ordering -> Handler Html
 sorterJudgementResource ord = defaultLayout $ do
-    maybeMatchNumber <- readAndLookupCookie matchNumberCookie
+    maybeMatchNumber :: Maybe Integer
+        <- readAndLookupCookie matchNumberCookie
     maybeSortState :: TrackSortState
         <- readAndLookupCookie sortStateCookie
-    -- maybeJudgements  <- readAndLookupCookie judgementsCookie
     case maybeSortState of
         Just (_, sortState) -> do
             showAndSetCookie sortStateCookie   (stepMergeSort sortState ord)
             showAndSetCookie matchNumberCookie ((1 :: Integer) + fromMaybe 0 maybeMatchNumber)
-            -- showAndSetCookie judgementsCookie  (updateHistory (fromMaybe [] maybeJudgements) nextComparison ord)
         _ -> return ()
-    redirect SorterR
 
 -- resources
 getSorterHomeR :: Handler Html
@@ -376,6 +374,18 @@ trackComparisonWidget (trackLeft, trackRight) = do
     yesod <- getYesod
     resolvedTrackLeft  <- resolveTrack yesod trackLeft
     resolvedTrackRight <- resolveTrack yesod trackRight
+    toWidget[julius|
+        judgement = (resource) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", resource);
+            xhr.onload = () => {
+                window.location.replace("@{SorterR}");
+            };
+            xhr.send();
+        };
+        judgeLeft  = () => { judgement("@{SorterLeftR}");  };
+        judgeRight = () => { judgement("@{SorterRightR}"); };
+    |]
     toWidget [whamlet|
         <div class="grid-container-4">
             <div class="grid-item">
@@ -390,11 +400,9 @@ trackComparisonWidget (trackLeft, trackRight) = do
             <div class="grid-item-2">
                 ^{trackAudioWidget  resolvedTrackLeft}
             <div class="grid-item-2">
-                <form action="@{SorterLeftR}", method="POST">
-                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName resolvedTrackLeft} wins">
+                <button class="inline-block button custom-button", onclick="judgeLeft()"> <p>#{Types.trackName resolvedTrackLeft}</p> </button>
             <div class="grid-item-2">
-                <form action="@{SorterRightR}", method="POST">
-                    <input class="inline-block button custom-button", type="submit" value="#{Types.trackName resolvedTrackRight} wins">
+                <button class="inline-block button custom-button", onclick="judgeRight()"> <p>#{Types.trackName resolvedTrackRight}</p> </button>
             <div class="grid-item-2">
                 ^{trackAudioWidget resolvedTrackRight}
     |]

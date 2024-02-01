@@ -6,6 +6,7 @@ module Misc.Sort (
     estimateComparisonsLeft,
     currentOrdering,
     currentOrderingRanks,
+    shuffle,
     SortState(SortComplete, SortIncomplete)
 ) where
 
